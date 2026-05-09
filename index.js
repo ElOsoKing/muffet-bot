@@ -316,6 +316,35 @@ function setupEvents(client) {
 }
 
 // ══════════════════════════════════════════
+//  CLIENTES PERSONALIZADOS POR CANAL (Plan Pro)
+// ══════════════════════════════════════════
+let customClients = {}; // { 'canal': tmiClient }
+
+async function setupCustomBots() {
+  for (const [ch, config] of Object.entries(channelConfigs)) {
+    if (config.plan === 'pro' && config.custom_bot_username && config.custom_bot_token) {
+      // Si ya tiene cliente y es el mismo bot, skip
+      if (customClients[ch]) continue;
+      try {
+        const client = new tmi.Client({
+          options: { debug: false },
+          identity: { username: config.custom_bot_username, password: config.custom_bot_token },
+          channels: [`#${ch}`],
+        });
+        setupEvents(client);
+        await client.connect();
+        customClients[ch] = client;
+        console.log(`🤖 Bot personalizado conectado: ${config.custom_bot_username} → #${ch}`);
+        // Salir del canal principal para no duplicar mensajes
+        try { await mainClient.part(`#${ch}`); } catch(e) {}
+      } catch (err) {
+        console.error(`Error conectando bot personalizado para ${ch}:`, err.message);
+      }
+    }
+  }
+}
+
+// ══════════════════════════════════════════
 //  ARRANQUE PRINCIPAL
 // ══════════════════════════════════════════
 async function start() {
@@ -337,6 +366,9 @@ async function start() {
   await mainClient.connect();
   console.log(`🐻🕷️ Conectado a ${channels.length} canales: ${channels.join(', ')}`);
 
+  // Configurar bots personalizados para usuarios Pro
+  await setupCustomBots();
+
   // Auto mensajes por canal
   setInterval(() => {
     for (const [ch, config] of Object.entries(channelConfigs)) {
@@ -351,11 +383,12 @@ async function start() {
   // Recargar config cada 2 minutos
   setInterval(async () => {
     await loadAllChannels();
+    await setupCustomBots();
     // Unirse a canales nuevos si los hay
     const currentChannels = mainClient.getChannels().map(c => c.replace('#',''));
     const allChannels = Object.keys(channelConfigs);
     for (const ch of allChannels) {
-      if (!currentChannels.includes(ch)) {
+      if (!currentChannels.includes(ch) && !customClients[ch]) {
         try {
           await mainClient.join(ch);
           console.log(`✅ Nuevo canal unido: ${ch}`);
