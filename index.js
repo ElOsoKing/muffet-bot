@@ -10,6 +10,8 @@ const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
+let muffetActive = true;
+
 let config = {
   bot_prompt: `Eres Muffet, la araña de Undertale y guardiana de la cueva del Rey Oso. Los viewers son "súbditos del reino". Hablas en español, eres coqueta y misteriosa. Usas emojis 🕷️ 🐻 👑 ♥. Respuestas cortas (máximo 2 oraciones).`,
   commands: {
@@ -17,8 +19,8 @@ let config = {
     '!té': '☕🕷️ ¡Aquí tienes tu té de araña con miel especial, dearie! 🐻♥',
     '!redes': '🐻👑 ¡Síguenos en Twitch y redes sociales! 🕷️♥',
     '!cueva': '🐻🕷️ ¡Bienvenido a la Cueva del Rey! 👑♥',
-    '!muffet': '🕷️ ¡Soy Muffet, la guardiana de la cueva del Rey Oso! 🐻👑♥',
-    '!comandos': '🕷️👑 Comandos: !miel !té !redes !cueva !muffet !ask 🐻♥',
+    '!muffet': '🕷️ ¡Soy la guardiana de la cueva del Rey Oso! 🐻👑♥',
+    '!comandos': '🕷️👑 Comandos: !miel !té !redes !cueva !ask 🐻♥',
   },
   auto_messages: [
     '🐻👑 ¡Recuerden seguir el canal, súbditos! 🕷️♥',
@@ -30,9 +32,6 @@ let config = {
   banned_words: [],
   warn_message: '⚠️ Cuidado, dearie~ 🕷️',
 };
-
-// ── Estado activo/silencio ──
-let muffetActive = true;
 
 async function loadConfig() {
   try {
@@ -69,25 +68,23 @@ async function getMuffetResponse(userMessage, username) {
       max_tokens: 150,
       temperature: 0.85,
     });
-    return completion.choices[0]?.message?.content || '¡Dearie, algo salió mal en la cueva! 🐻🕷️';
+    return completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🐻🕷️';
   } catch (err) {
     console.error('Error Groq:', err.message);
-    return '¡Las telarañas de la cueva se enredaron, dearie! 🕷️';
+    return '¡Las telarañas se enredaron, dearie! 🕷️';
   }
 }
 
-// ── Verificar si es mod o el streamer ──
 function isMod(tags, channel) {
   return tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channel.replace('#','').toLowerCase();
 }
 
 const greeted = new Set();
 const welcomePhrases = [
-  (u) => `¡${u} ha llegado a la cueva del Rey Oso! 🐻🕷️ ¡Bienvenido/a al reino, dearie! ♥`,
-  (u) => `¡Oh, una nueva alma! ¡Bienvenid@ ${u}! 👑🕷️ ¡El Rey Oso te saluda! 🐻♥`,
+  (u) => `¡${u} llegó a la cueva del Rey Oso! 🐻🕷️ ¡Bienvenido/a al reino, dearie! ♥`,
+  (u) => `¡Una nueva alma para el reino! ¡Bienvenid@ ${u}! 👑🕷️ 🐻♥`,
   (u) => `¡${u} entró a la cueva! 🐻 ¡Aquí nadie se va sin disfrutar, dearie! 🕷️♥`,
-  (u) => `¡Mmmm, ${u}! ¡Un nuevo súbdito del reino! 👑 ¡Tengo té con miel, dearie! 🐻🕷️♥`,
-  (u) => `¡${u} fue atrapado/a por las telarañas! 🕷️🐻 ¡Bienvenid@ para siempre, dearie! 👑♥`,
+  (u) => `¡${u}, un nuevo súbdito del reino! 👑 ¡Tengo té con miel para ti! 🐻🕷️♥`,
 ];
 
 const client = new tmi.Client({
@@ -99,15 +96,12 @@ const client = new tmi.Client({
 client.connect().then(async () => {
   console.log(`🐻🕷️ MuffetBot conectada a #${TWITCH_CHANNEL}`);
   await loadConfig();
-
   setInterval(() => {
     if (!muffetActive) return;
-    if (config.auto_messages && config.auto_messages.length > 0) {
-      const msg = config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)];
-      client.say(TWITCH_CHANNEL, msg);
+    if (config.auto_messages?.length > 0) {
+      client.say(TWITCH_CHANNEL, config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)]);
     }
   }, 20 * 60 * 1000);
-
 }).catch(console.error);
 
 client.on('message', async (channel, tags, message, self) => {
@@ -117,27 +111,27 @@ client.on('message', async (channel, tags, message, self) => {
   const msgLower = message.trim().toLowerCase();
   const firstWord = msgLower.split(' ')[0];
 
-  // ── Comandos de mod para activar/desactivar ──
+  // ── Comandos de mod ──
   if (firstWord === '!muffeton') {
     if (!isMod(tags, channel)) return;
     muffetActive = true;
-    client.say(channel, `¡Muffet ha despertado, dearies! 🕷️🐻 ¡La guardiana de la cueva está de vuelta! 👑♥`);
+    client.say(channel, `¡La guardiana ha despertado! 🕷️🐻 ¡Estoy de vuelta en la cueva, dearies! 👑♥`);
     return;
   }
 
   if (firstWord === '!muffetoff') {
     if (!isMod(tags, channel)) return;
     muffetActive = false;
-    client.say(channel, `¡Muffet se va a descansar, dearies~ 🕷️ ¡El Rey me dio el día libre! 🐻👑 Hasta pronto~ ♥`);
+    client.say(channel, `¡La guardiana se va a descansar~ 🕷️ ¡El Rey me dio el día libre! 🐻👑 ¡Hasta pronto, dearies! ♥`);
     return;
   }
 
-  // ── Estado de Muffet ──
   if (firstWord === '!muffetstatus') {
-    client.say(channel, muffetActive
-      ? `🟢 Muffet está activa y vigilando la cueva, dearie~ 🕷️🐻♥`
-      : `🔴 Muffet está descansando~ 🕷️ Usa !muffeton para despertarla 🐻`
-    );
+    // Sin mencionar "@muffet" para evitar bucle
+    const msg = muffetActive
+      ? `🟢 La guardiana está activa y vigilando la cueva~ 🕷️🐻♥`
+      : `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla 🐻`;
+    client.say(channel, msg);
     return;
   }
 
@@ -148,19 +142,18 @@ client.on('message', async (channel, tags, message, self) => {
     setTimeout(() => client.say(channel, phrase(username)), 2000);
   }
 
-  // ── Si Muffet está en silencio, no hace nada más ──
+  // ── Si está en silencio, no hace más ──
   if (!muffetActive) return;
 
   // ── Moderación ──
-  if (config.mod_enabled && config.banned_words && config.banned_words.length > 0) {
-    const hasBadWord = config.banned_words.some(w => msgLower.includes(w.toLowerCase()));
-    if (hasBadWord) {
+  if (config.mod_enabled && config.banned_words?.length > 0) {
+    if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
       client.say(channel, `@${username} ${config.warn_message}`);
       return;
     }
   }
 
-  // ── Comando !ask / !pregunta ──
+  // ── !ask / !pregunta ──
   if (firstWord === '!ask' || firstWord === '!pregunta') {
     if (!config.ai_enabled) {
       client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️🐻`);
@@ -168,33 +161,26 @@ client.on('message', async (channel, tags, message, self) => {
     }
     const question = message.trim().slice(firstWord.length).trim();
     if (!question) {
-      client.say(channel, `¡${username}, dearie! Escribe: !ask ¿tu pregunta aquí? 🐻🕷️`);
+      client.say(channel, `¡${username}, dearie! Escribe: !ask ¿tu pregunta? 🐻🕷️`);
       return;
     }
-    const response = await getMuffetResponse(question, username);
-    client.say(channel, `@${username} ${response}`);
+    client.say(channel, `@${username} ${await getMuffetResponse(question, username)}`);
     return;
   }
 
   // ── Comandos dinámicos ──
-  if (config.commands && config.commands[firstWord]) {
+  if (config.commands?.[firstWord]) {
     client.say(channel, config.commands[firstWord]);
     return;
   }
 
-  // ── Menciones ──
-  if ((msgLower.includes('muffet') || msgLower.includes('rey oso') || msgLower.includes('elosoking')) && !msgLower.startsWith('!')) {
-    if (!config.ai_enabled) return;
-    const response = await getMuffetResponse(message, username);
-    client.say(channel, `@${username} ${response}`);
-    return;
-  }
+  // ── Menciones (sin incluir el nombre del bot para evitar bucles) ──
+  const botName = TWITCH_BOT_USERNAME.toLowerCase();
+  if (msgLower.startsWith(`@${botName}`)) return; // ignorar menciones al bot mismo
 
-  if (msgLower.startsWith('@muffet')) {
+  if ((msgLower.includes('rey oso') || msgLower.includes('elosoking')) && !msgLower.startsWith('!')) {
     if (!config.ai_enabled) return;
-    const question = message.replace(/@muffet\w*/i, '').trim();
-    const response = await getMuffetResponse(question || '¡Hola!', username);
-    client.say(channel, `@${username} ${response}`);
+    client.say(channel, `@${username} ${await getMuffetResponse(message, username)}`);
     return;
   }
 });
@@ -206,10 +192,10 @@ client.on('subscription', (channel, username) => {
   client.say(channel, `¡¡${username} se unió al reino!! 🐻👑 ¡Ahora eres súbdito oficial, dearie! 🕷️♥`);
 });
 client.on('resub', (channel, username, months) => {
-  client.say(channel, `¡¡${username} lleva ${months} meses en la cueva!! 🐻🕷️ ¡Eres de los más leales, dearie! 👑♥`);
+  client.say(channel, `¡¡${username} lleva ${months} meses en la cueva!! 🐻🕷️ ¡Eres de los más leales! 👑♥`);
 });
 client.on('subgift', (channel, username, recipient) => {
-  client.say(channel, `¡¡${username} le regaló el reino a ${recipient}!! 🐻👑 ¡Qué generoso/a, dearie! 🕷️♥`);
+  client.say(channel, `¡¡${username} le regaló el reino a ${recipient}!! 🐻👑 ¡Qué generoso/a! 🕷️♥`);
 });
 
-console.log('🐻🕷️ MuffetBot — Guardiana de la Cueva del Rey Oso iniciando...');
+console.log('🐻🕷️ MuffetBot iniciando...');
