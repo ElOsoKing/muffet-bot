@@ -228,7 +228,7 @@ async function handleMessage(client, channel, tags, message, self) {
   }
 
   // ── Si está en silencio ──
-  if (!muffetActiveMap[channelName]) return;
+  if (muffetActiveMap[channelName] === false) return;
 
   // ── Moderación ──
   if (config.mod_enabled) {
@@ -372,7 +372,7 @@ async function start() {
   // Auto mensajes por canal
   setInterval(() => {
     for (const [ch, config] of Object.entries(channelConfigs)) {
-      if (!muffetActiveMap[ch]) continue;
+      if (muffetActiveMap[ch] === false) continue;
       if (config.auto_messages?.length > 0) {
         const msg = config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)];
         mainClient.say(`#${ch}`, msg).catch(() => {});
