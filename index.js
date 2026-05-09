@@ -151,7 +151,7 @@ Responde SOLO el JSON, sin explicaciones adicionales.`
 async function getMuffetResponse(userMessage, username) {
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama3-8b-8192',
+      model: 'llama-3.1-8b-instant',
       messages: [
         { role: 'system', content: config.bot_prompt },
         { role: 'user', content: `El usuario "${username}" dice: ${userMessage}` }
@@ -243,8 +243,9 @@ client.on('message', async (channel, tags, message, self) => {
   if (config.mod_enabled) {
     const isBroadcasterOrMod = tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === TWITCH_CHANNEL.toLowerCase();
     const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+    const isVIP = !!tags.badges?.vip;
 
-    // Los mods, broadcaster y subs no se moderan
+    // Los mods, broadcaster, subs y VIPs no se moderan con IA
     if (!isBroadcasterOrMod) {
       // 1. Primero revisión manual (instantánea)
       if (config.banned_words?.length > 0) {
@@ -255,8 +256,8 @@ client.on('message', async (channel, tags, message, self) => {
         }
       }
 
-      // 2. Revisión con IA (solo si no es sub para ahorrar cuota)
-      if (!isSub) {
+      // 2. Revisión con IA (subs y VIPs exentos para ahorrar cuota)
+      if (!isSub && !isVIP) {
         const check = await checkMessageWithAI(message);
         if (check.flagged) {
           console.log(`🛡️ IA moderó a ${username}: ${check.reason}`);
