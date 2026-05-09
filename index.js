@@ -172,10 +172,31 @@ client.on('message', async (channel, tags, message, self) => {
   }
 
   // ── Comandos dinámicos ──
+  // ── Comandos dinámicos con permisos ──
   if (config.commands?.[firstWord]) {
-    const args = message.trim().split(" ").slice(1);
-    const touser = args[0] ? args[0].replace("@","") : username;
-    let resp = config.commands[firstWord];
+    const cmd = config.commands[firstWord];
+    const response = typeof cmd === 'object' ? cmd.response : cmd;
+    const perms = typeof cmd === 'object' && cmd.perms ? cmd.perms : ['everyone'];
+
+    // Verificar permisos
+    const isBroadcaster = tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === TWITCH_CHANNEL.toLowerCase();
+    const isModerator   = tags.mod || isBroadcaster;
+    const isVIP         = !!tags.badges?.vip;
+    const isSub         = !!tags.subscriber || !!tags.badges?.subscriber;
+
+    const canUse =
+      perms.includes('everyone') ||
+      (perms.includes('broadcaster') && isBroadcaster) ||
+      (perms.includes('mod')         && isModerator) ||
+      (perms.includes('vip')         && isVIP) ||
+      (perms.includes('sub')         && isSub) ||
+      isModerator; // mods siempre pueden usar todo
+
+    if (!canUse) return; // silencio si no tiene permiso
+
+    const args = message.trim().split(' ').slice(1);
+    const touser = args[0] ? args[0].replace('@','') : username;
+    let resp = response;
     resp = resp.replace(/\{touser\}/g, touser).replace(/\{user\}/g, username);
     client.say(channel, resp);
     return;
