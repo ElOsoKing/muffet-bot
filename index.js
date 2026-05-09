@@ -107,10 +107,51 @@ async function flushStats() {
   }
 }
 
-async function getMuffetResponse(userMessage, username) {
+// ── Moderación con IA ──
+async function checkMessageWithAI(message) {
   try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un sistema de moderación de chat de Twitch. Analiza el mensaje y responde SOLO con un JSON así:
+{"flagged": true/false, "reason": "razón breve o null"}
+
+Marca como flagged=true si el mensaje contiene:
+- Insultos, groserías o lenguaje ofensivo (incluso disfrazado con símbolos o espacios)
+- Links maliciosos, spam de URLs o promociones no autorizadas
+- Acoso, amenazas o toxicidad hacia otros usuarios
+- Spam repetitivo o flood de caracteres
+- Contenido para adultos inapropiado
+
+Marca como flagged=false si es:
+- Conversación normal del chat
+- Preguntas o comentarios sobre el stream
+- Emojis o expresiones normales
+- Links de Twitch, YouTube o redes conocidas
+
+Responde SOLO el JSON, sin explicaciones adicionales.`
+        },
+        { role: 'user', content: `Mensaje a analizar: "${message}"` }
+      ],
+      max_tokens: 60,
+      temperature: 0.1,
+    });
+
+    const text = completion.choices[0]?.message?.content || '{"flagged":false}';
+    const clean = text.replace(/```json|```/g, '').trim();
+    return JSON.parse(clean);
+  } catch (err) {
+    console.error('Error moderación IA:', err.message);
+    return { flagged: false };
+  }
+}
+
+async function getMuffetResponse(userMessage, username) {
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama3-8b-8192',
       messages: [
         { role: 'system', content: config.bot_prompt },
         { role: 'user', content: `El usuario "${username}" dice: ${userMessage}` }
@@ -198,11 +239,31 @@ client.on('message', async (channel, tags, message, self) => {
   // ── Si está en silencio, no hace más ──
   if (!muffetActive) return;
 
-  // ── Moderación ──
-  if (config.mod_enabled && config.banned_words?.length > 0) {
-    if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
-      client.say(channel, `@${username} ${config.warn_message}`);
-      return;
+  // ── Moderación híbrida ──
+  if (config.mod_enabled) {
+    const isBroadcasterOrMod = tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === TWITCH_CHANNEL.toLowerCase();
+    const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+
+    // Los mods, broadcaster y subs no se moderan
+    if (!isBroadcasterOrMod) {
+      // 1. Primero revisión manual (instantánea)
+      if (config.banned_words?.length > 0) {
+        const hasBadWord = config.banned_words.some(w => msgLower.includes(w.toLowerCase()));
+        if (hasBadWord) {
+          client.say(channel, `@${username} ${config.warn_message}`);
+          return;
+        }
+      }
+
+      // 2. Revisión con IA (solo si no es sub para ahorrar cuota)
+      if (!isSub) {
+        const check = await checkMessageWithAI(message);
+        if (check.flagged) {
+          console.log(`🛡️ IA moderó a ${username}: ${check.reason}`);
+          client.say(channel, `@${username} ${config.warn_message}`);
+          return;
+        }
+      }
     }
   }
 
