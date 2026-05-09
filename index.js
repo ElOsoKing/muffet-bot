@@ -135,6 +135,9 @@ client.on('message', async (channel, tags, message, self) => {
     return;
   }
 
+  // Ignorar al bot mismo
+  if (username.toLowerCase() === TWITCH_BOT_USERNAME.toLowerCase()) return;
+
   // ── Saludo nuevo viewer (siempre activo) ──
   if (!greeted.has(username.toLowerCase())) {
     greeted.add(username.toLowerCase());
