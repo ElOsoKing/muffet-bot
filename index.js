@@ -1,155 +1,148 @@
 const tmi = require('tmi.js');
 const Groq = require('groq-sdk');
 
-const TWITCH_BOT_USERNAME = process.env.TWITCH_BOT_USERNAME;
-const TWITCH_OAUTH_TOKEN  = process.env.TWITCH_OAUTH_TOKEN;
-const TWITCH_CHANNEL      = process.env.TWITCH_CHANNEL;
+// ══════════════════════════════════════════
+//  CONFIGURACIÓN GLOBAL
+// ══════════════════════════════════════════
+const TWITCH_BOT_USERNAME = process.env.TWITCH_BOT_USERNAME; // muffet_osoking
+const TWITCH_OAUTH_TOKEN  = process.env.TWITCH_OAUTH_TOKEN;  // token de muffet_osoking
 const GROQ_API_KEY        = process.env.GROQ_API_KEY;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
-let muffetActive = true;
+// ══════════════════════════════════════════
+//  CONFIG POR CANAL (cargada desde Supabase)
+// ══════════════════════════════════════════
+let channelConfigs = {}; // { 'elosoking1': { bot_prompt, commands, ... } }
+let muffetActiveMap = {}; // { 'elosoking1': true/false }
+let greetedMap = {}; // { 'elosoking1': Set() }
 
-let config = {
-  bot_prompt: `Eres Muffet, la araña de Undertale y guardiana de la cueva del Rey Oso. Los viewers son "súbditos del reino". Hablas en español, eres coqueta y misteriosa. Usas emojis 🕷️ 🐻 👑 ♥. Respuestas cortas (máximo 2 oraciones).`,
+const defaultConfig = (username) => ({
+  bot_prompt: `Eres Muffet, la araña de Undertale. Eres la consejera del canal de ${username}. Los viewers son "súbditos" o "dearies". Hablas en español, eres coqueta y misteriosa. Usas emojis 🕷️ 👑 ♥. Respuestas cortas (máximo 2 oraciones).`,
   commands: {
-    '!miel': '🍯🐻 ¡El Rey Oso tiene miel fresca para todos sus súbditos! ♥',
-    '!té': '☕🕷️ ¡Aquí tienes tu té de araña con miel especial, dearie! 🐻♥',
-    '!redes': '🐻👑 ¡Síguenos en Twitch y redes sociales! 🕷️♥',
-    '!cueva': '🐻🕷️ ¡Bienvenido a la Cueva del Rey! 👑♥',
-    '!muffet': '🕷️ ¡Soy la guardiana de la cueva del Rey Oso! 🐻👑♥',
-    '!comandos': '🕷️👑 Comandos: !miel !té !redes !cueva !ask 🐻♥',
+    '!muffet': { response: '🕷️ ¡Soy Muffet, consejera del canal! 👑♥', perms: ['everyone'] },
+    '!comandos': { response: '🕷️ Comandos: !ask — ¡Pregúntame lo que quieras! 👑♥', perms: ['everyone'] },
   },
-  auto_messages: [
-    '🐻👑 ¡Recuerden seguir el canal, súbditos! 🕷️♥',
-    '🍯🕷️ ¡Escribe !miel o !té! 🐻',
-    '👑🕷️ ¡Usa !ask para preguntarme! 🐻♥',
-  ],
+  auto_messages: ['🕷️ ¡Usa !ask para preguntarme cualquier cosa! 👑♥'],
   ai_enabled: true,
   mod_enabled: false,
   banned_words: [],
   warn_message: '⚠️ Cuidado, dearie~ 🕷️',
-};
+  plan: 'free',
+});
 
-async function loadConfig() {
+// ══════════════════════════════════════════
+//  CARGAR TODOS LOS CANALES APROBADOS
+// ══════════════════════════════════════════
+async function loadAllChannels() {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${TWITCH_CHANNEL}&limit=1`,
+      `${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=*`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
-    const data = await res.json();
-    if (data && data[0]) {
-      const row = data[0];
-      if (row.bot_prompt)              config.bot_prompt    = row.bot_prompt;
-      if (row.commands)                config.commands      = row.commands;
-      if (row.auto_messages)           config.auto_messages = row.auto_messages;
-      if (row.ai_enabled  !== undefined) config.ai_enabled  = row.ai_enabled;
-      if (row.mod_enabled !== undefined) config.mod_enabled = row.mod_enabled;
-      if (row.banned_words)            config.banned_words  = row.banned_words;
-      if (row.warn_message)            config.warn_message  = row.warn_message;
-      console.log('🐻🕷️ Config cargada desde Supabase');
-    }
+    const streamers = await res.json();
+    if (!Array.isArray(streamers)) { console.error('Error cargando canales:', streamers); return []; }
+
+    streamers.forEach(s => {
+      const ch = s.twitch_username.toLowerCase();
+      channelConfigs[ch] = {
+        bot_prompt:    s.bot_prompt    || defaultConfig(ch).bot_prompt,
+        commands:      s.commands      || defaultConfig(ch).commands,
+        auto_messages: s.auto_messages || defaultConfig(ch).auto_messages,
+        ai_enabled:    s.ai_enabled    !== undefined ? s.ai_enabled  : true,
+        mod_enabled:   s.mod_enabled   !== undefined ? s.mod_enabled : false,
+        banned_words:  s.banned_words  || [],
+        warn_message:  s.warn_message  || '⚠️ Cuidado, dearie~ 🕷️',
+        plan:          s.plan          || 'free',
+        custom_bot_username: s.custom_bot_username || null,
+        custom_bot_token:    s.custom_bot_token    || null,
+      };
+      if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = true;
+      if (!greetedMap[ch]) greetedMap[ch] = new Set();
+    });
+
+    console.log(`🐻🕷️ Config cargada para ${streamers.length} canales:`, streamers.map(s => s.twitch_username).join(', '));
+    return streamers.map(s => s.twitch_username.toLowerCase());
   } catch (err) {
-    console.error('Error cargando config:', err.message);
+    console.error('Error cargando canales:', err.message);
+    return [];
   }
 }
-setInterval(loadConfig, 2 * 60 * 1000);
 
-// ── Registrar uso de comandos ──
-let statsBuffer = {}; // acumula stats en memoria
+// ══════════════════════════════════════════
+//  STATS
+// ══════════════════════════════════════════
+let statsBuffer = {};
 let statsFlushTimer = null;
 
-function trackCommandUse(trigger) {
-  statsBuffer[trigger] = (statsBuffer[trigger] || 0) + 1;
-  // Flush a Supabase cada 30 segundos para no hacer muchas llamadas
-  if (!statsFlushTimer) {
-    statsFlushTimer = setTimeout(flushStats, 30000);
-  }
+function trackCommandUse(channel, trigger) {
+  const key = `${channel}:${trigger}`;
+  statsBuffer[key] = (statsBuffer[key] || 0) + 1;
+  if (!statsFlushTimer) statsFlushTimer = setTimeout(flushStats, 30000);
 }
 
 async function flushStats() {
   statsFlushTimer = null;
   if (Object.keys(statsBuffer).length === 0) return;
   try {
-    // Primero leer stats actuales
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${TWITCH_CHANNEL}&limit=1`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-    );
-    const data = await res.json();
-    const current = (data && data[0] && data[0].command_stats) || {};
-
-    // Sumar los nuevos usos
-    const updated = { ...current };
-    for (const [cmd, count] of Object.entries(statsBuffer)) {
-      updated[cmd] = (updated[cmd] || 0) + count;
+    const byChannel = {};
+    for (const [key, count] of Object.entries(statsBuffer)) {
+      const [ch, cmd] = key.split(':');
+      if (!byChannel[ch]) byChannel[ch] = {};
+      byChannel[ch][cmd] = (byChannel[ch][cmd] || 0) + count;
     }
     statsBuffer = {};
 
-    // Guardar en Supabase
-    await fetch(
-      `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${TWITCH_CHANNEL}`,
-      {
+    for (const [ch, newStats] of Object.entries(byChannel)) {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      );
+      const data = await res.json();
+      const current = (data && data[0] && data[0].command_stats) || {};
+      const updated = { ...current };
+      for (const [cmd, count] of Object.entries(newStats)) updated[cmd] = (updated[cmd] || 0) + count;
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
         method: 'PATCH',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ command_stats: updated })
-      }
-    );
-    console.log('📊 Stats actualizadas:', updated);
+      });
+    }
+    console.log('📊 Stats actualizadas');
   } catch (err) {
     console.error('Error guardando stats:', err.message);
   }
 }
 
-// ── Moderación con IA ──
+// ══════════════════════════════════════════
+//  MODERACIÓN CON IA
+// ══════════════════════════════════════════
 async function checkMessageWithAI(message) {
   try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
       messages: [
-        {
-          role: 'system',
-          content: `Eres un sistema de moderación de chat de Twitch. Analiza el mensaje y responde SOLO con un JSON así:
-{"flagged": true/false, "reason": "razón breve o null"}
-
-Marca como flagged=true si el mensaje contiene:
-- Insultos, groserías o lenguaje ofensivo (incluso disfrazado con símbolos o espacios)
-- Links maliciosos, spam de URLs o promociones no autorizadas
-- Acoso, amenazas o toxicidad hacia otros usuarios
-- Spam repetitivo o flood de caracteres
-- Contenido para adultos inapropiado
-
-Marca como flagged=false si es:
-- Conversación normal del chat
-- Preguntas o comentarios sobre el stream
-- Emojis o expresiones normales
-- Links de Twitch, YouTube o redes conocidas
-
-Responde SOLO el JSON, sin explicaciones adicionales.`
-        },
-        { role: 'user', content: `Mensaje a analizar: "${message}"` }
+        { role: 'system', content: `Eres un sistema de moderación de chat de Twitch. Analiza el mensaje y responde SOLO con JSON: {"flagged": true/false, "reason": "razón o null"}. Marca true si hay: insultos, groserías, links maliciosos, spam, acoso, contenido adulto. Marca false si es conversación normal. SOLO el JSON.` },
+        { role: 'user', content: `Mensaje: "${message}"` }
       ],
       max_tokens: 60,
       temperature: 0.1,
     });
-
     const text = completion.choices[0]?.message?.content || '{"flagged":false}';
-    const clean = text.replace(/```json|```/g, '').trim();
-    return JSON.parse(clean);
+    return JSON.parse(text.replace(/```json|```/g, '').trim());
   } catch (err) {
-    console.error('Error moderación IA:', err.message);
     return { flagged: false };
   }
 }
 
-async function getMuffetResponse(userMessage, username) {
+// ══════════════════════════════════════════
+//  RESPUESTA DE IA
+// ══════════════════════════════════════════
+async function getMuffetResponse(channel, userMessage, username) {
   try {
+    const config = channelConfigs[channel] || defaultConfig(channel);
     const completion = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
       messages: [
@@ -159,108 +152,100 @@ async function getMuffetResponse(userMessage, username) {
       max_tokens: 150,
       temperature: 0.85,
     });
-    return completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🐻🕷️';
+    return completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🕷️';
   } catch (err) {
     console.error('Error Groq:', err.message);
     return '¡Las telarañas se enredaron, dearie! 🕷️';
   }
 }
 
-function isMod(tags, channel) {
-  return tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channel.replace('#','').toLowerCase();
+// ══════════════════════════════════════════
+//  CLIENTE TMI PRINCIPAL (muffet_osoking)
+// ══════════════════════════════════════════
+let mainClient = null;
+
+function createMainClient(channels) {
+  const client = new tmi.Client({
+    options: { debug: false },
+    identity: { username: TWITCH_BOT_USERNAME, password: TWITCH_OAUTH_TOKEN },
+    channels: channels,
+  });
+  return client;
 }
 
-const greeted = new Set();
+// ══════════════════════════════════════════
+//  HANDLER DE MENSAJES
+// ══════════════════════════════════════════
 const welcomePhrases = [
-  (u) => `¡${u} llegó a la cueva del Rey Oso! 🐻🕷️ ¡Bienvenido/a al reino, dearie! ♥`,
-  (u) => `¡Una nueva alma para el reino! ¡Bienvenid@ ${u}! 👑🕷️ 🐻♥`,
-  (u) => `¡${u} entró a la cueva! 🐻 ¡Aquí nadie se va sin disfrutar, dearie! 🕷️♥`,
-  (u) => `¡${u}, un nuevo súbdito del reino! 👑 ¡Tengo té con miel para ti! 🐻🕷️♥`,
+  (u) => `¡${u} llegó al canal! 🕷️ ¡Bienvenido/a, dearie! ♥`,
+  (u) => `¡Una nueva alma! ¡Bienvenid@ ${u}! 🕷️♥`,
+  (u) => `¡${u} entró al chat! 🕷️ ¡Aquí nadie se va sin disfrutar, dearie! ♥`,
+  (u) => `¡${u}, un nuevo súbdito! 👑 ¡Tengo té para ti! 🕷️♥`,
 ];
 
-const client = new tmi.Client({
-  options: { debug: true },
-  identity: { username: TWITCH_BOT_USERNAME, password: TWITCH_OAUTH_TOKEN },
-  channels: [TWITCH_CHANNEL],
-});
+function isMod(tags, channelName) {
+  return tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channelName.toLowerCase();
+}
 
-client.connect().then(async () => {
-  console.log(`🐻🕷️ MuffetBot conectada a #${TWITCH_CHANNEL}`);
-  await loadConfig();
-  setInterval(() => {
-    if (!muffetActive) return;
-    if (config.auto_messages?.length > 0) {
-      client.say(TWITCH_CHANNEL, config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)]);
-    }
-  }, 20 * 60 * 1000);
-}).catch(console.error);
-
-client.on('message', async (channel, tags, message, self) => {
+async function handleMessage(client, channel, tags, message, self) {
   if (self) return;
 
+  const channelName = channel.replace('#', '').toLowerCase();
+  const config = channelConfigs[channelName] || defaultConfig(channelName);
   const username = tags['display-name'] || tags.username;
   const msgLower = message.trim().toLowerCase();
   const firstWord = msgLower.split(' ')[0];
+  const botName = TWITCH_BOT_USERNAME.toLowerCase();
 
-  // ── Comandos de mod ──
+  // Ignorar al bot
+  if (username.toLowerCase() === botName) return;
+
+  // ── Comandos de control (solo mods) ──
   if (firstWord === '!muffeton') {
-    if (!isMod(tags, channel)) return;
-    muffetActive = true;
-    client.say(channel, `¡La guardiana ha despertado! 🕷️🐻 ¡Estoy de vuelta en la cueva, dearies! 👑♥`);
+    if (!isMod(tags, channelName)) return;
+    muffetActiveMap[channelName] = true;
+    client.say(channel, `¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥`);
     return;
   }
-
   if (firstWord === '!muffetoff') {
-    if (!isMod(tags, channel)) return;
-    muffetActive = false;
-    client.say(channel, `¡La guardiana se va a descansar~ 🕷️ ¡El Rey me dio el día libre! 🐻👑 ¡Hasta pronto, dearies! ♥`);
+    if (!isMod(tags, channelName)) return;
+    muffetActiveMap[channelName] = false;
+    client.say(channel, `¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥`);
     return;
   }
-
   if (firstWord === '!muffetstatus') {
-    // Sin mencionar "@muffet" para evitar bucle
-    const msg = muffetActive
-      ? `🟢 La guardiana está activa y vigilando la cueva~ 🕷️🐻♥`
-      : `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla 🐻`;
-    client.say(channel, msg);
+    const active = muffetActiveMap[channelName] !== false;
+    client.say(channel, active ? `🟢 La guardiana está activa~ 🕷️♥` : `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`);
     return;
   }
-
-  // Ignorar al bot mismo
-  if (username.toLowerCase() === TWITCH_BOT_USERNAME.toLowerCase()) return;
 
   // ── Saludo nuevo viewer (siempre activo) ──
-  if (!greeted.has(username.toLowerCase())) {
-    greeted.add(username.toLowerCase());
+  if (!greetedMap[channelName]) greetedMap[channelName] = new Set();
+  if (!greetedMap[channelName].has(username.toLowerCase())) {
+    greetedMap[channelName].add(username.toLowerCase());
     const phrase = welcomePhrases[Math.floor(Math.random() * welcomePhrases.length)];
     setTimeout(() => client.say(channel, phrase(username)), 2000);
   }
 
-  // ── Si está en silencio, no hace más ──
-  if (!muffetActive) return;
+  // ── Si está en silencio ──
+  if (!muffetActiveMap[channelName]) return;
 
-  // ── Moderación híbrida ──
+  // ── Moderación ──
   if (config.mod_enabled) {
-    const isBroadcasterOrMod = tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === TWITCH_CHANNEL.toLowerCase();
+    const isModOrBroadcaster = isMod(tags, channelName);
     const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
     const isVIP = !!tags.badges?.vip;
 
-    // Los mods, broadcaster, subs y VIPs no se moderan con IA
-    if (!isBroadcasterOrMod) {
-      // 1. Primero revisión manual (instantánea)
+    if (!isModOrBroadcaster) {
       if (config.banned_words?.length > 0) {
-        const hasBadWord = config.banned_words.some(w => msgLower.includes(w.toLowerCase()));
-        if (hasBadWord) {
+        if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
           client.say(channel, `@${username} ${config.warn_message}`);
           return;
         }
       }
-
-      // 2. Revisión con IA (subs y VIPs exentos para ahorrar cuota)
       if (!isSub && !isVIP) {
         const check = await checkMessageWithAI(message);
         if (check.flagged) {
-          console.log(`🛡️ IA moderó a ${username}: ${check.reason}`);
           client.say(channel, `@${username} ${config.warn_message}`);
           return;
         }
@@ -270,74 +255,114 @@ client.on('message', async (channel, tags, message, self) => {
 
   // ── !ask / !pregunta ──
   if (firstWord === '!ask' || firstWord === '!pregunta') {
-    if (!config.ai_enabled) {
-      client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️🐻`);
-      return;
-    }
+    if (!config.ai_enabled) { client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️`); return; }
     const question = message.trim().slice(firstWord.length).trim();
-    if (!question) {
-      client.say(channel, `¡${username}, dearie! Escribe: !ask ¿tu pregunta? 🐻🕷️`);
-      return;
-    }
-    client.say(channel, `@${username} ${await getMuffetResponse(question, username)}`);
+    if (!question) { client.say(channel, `¡${username}, dearie! Escribe: !ask ¿tu pregunta? 🕷️`); return; }
+    client.say(channel, `@${username} ${await getMuffetResponse(channelName, question, username)}`);
     return;
   }
 
   // ── Comandos dinámicos ──
-  // ── Comandos dinámicos con permisos ──
   if (config.commands?.[firstWord]) {
-    // Registrar uso del comando en stats
-    trackCommandUse(firstWord);
+    trackCommandUse(channelName, firstWord);
     const cmd = config.commands[firstWord];
     const response = typeof cmd === 'object' ? cmd.response : cmd;
     const perms = typeof cmd === 'object' && cmd.perms ? cmd.perms : ['everyone'];
 
-    // Verificar permisos
-    const isBroadcaster = tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === TWITCH_CHANNEL.toLowerCase();
-    const isModerator   = tags.mod || isBroadcaster;
+    const isBroadcaster = tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channelName;
+    const isModUser     = tags.mod || isBroadcaster;
     const isVIP         = !!tags.badges?.vip;
     const isSub         = !!tags.subscriber || !!tags.badges?.subscriber;
 
-    const canUse =
-      perms.includes('everyone') ||
+    const canUse = perms.includes('everyone') || isModUser ||
       (perms.includes('broadcaster') && isBroadcaster) ||
-      (perms.includes('mod')         && isModerator) ||
-      (perms.includes('vip')         && isVIP) ||
-      (perms.includes('sub')         && isSub) ||
-      isModerator; // mods siempre pueden usar todo
+      (perms.includes('vip') && isVIP) ||
+      (perms.includes('sub') && isSub);
 
-    if (!canUse) return; // silencio si no tiene permiso
+    if (!canUse) return;
 
     const args = message.trim().split(' ').slice(1);
-    const touser = args[0] ? args[0].replace('@','') : username;
-    let resp = response;
-    resp = resp.replace(/\{touser\}/g, touser).replace(/\{user\}/g, username);
-    client.say(channel, resp);
+    const touser = args[0] ? args[0].replace('@', '') : username;
+    client.say(channel, response.replace(/\{touser\}/g, touser).replace(/\{user\}/g, username));
     return;
   }
 
-  // ── Menciones (sin incluir el nombre del bot para evitar bucles) ──
-  const botName = TWITCH_BOT_USERNAME.toLowerCase();
-  if (msgLower.startsWith(`@${botName}`)) return; // ignorar menciones al bot mismo
-
+  // ── Menciones ──
   if ((msgLower.includes('rey oso') || msgLower.includes('elosoking')) && !msgLower.startsWith('!')) {
     if (!config.ai_enabled) return;
-    client.say(channel, `@${username} ${await getMuffetResponse(message, username)}`);
+    client.say(channel, `@${username} ${await getMuffetResponse(channelName, message, username)}`);
     return;
   }
-});
+}
 
-client.on('raided', (channel, username, viewers) => {
-  client.say(channel, `¡¡RAID!! 🐻👑 ¡${username} trae ${viewers} súbditos a la cueva! ¡BIENVENIDOS AL REINO! 🕷️♥♥♥`);
-});
-client.on('subscription', (channel, username) => {
-  client.say(channel, `¡¡${username} se unió al reino!! 🐻👑 ¡Ahora eres súbdito oficial, dearie! 🕷️♥`);
-});
-client.on('resub', (channel, username, months) => {
-  client.say(channel, `¡¡${username} lleva ${months} meses en la cueva!! 🐻🕷️ ¡Eres de los más leales! 👑♥`);
-});
-client.on('subgift', (channel, username, recipient) => {
-  client.say(channel, `¡¡${username} le regaló el reino a ${recipient}!! 🐻👑 ¡Qué generoso/a! 🕷️♥`);
-});
+// ══════════════════════════════════════════
+//  EVENTOS ESPECIALES
+// ══════════════════════════════════════════
+function setupEvents(client) {
+  client.on('message', (channel, tags, message, self) => handleMessage(client, channel, tags, message, self));
 
-console.log('🐻🕷️ MuffetBot iniciando...');
+  client.on('raided', (channel, username, viewers) => {
+    client.say(channel, `¡¡RAID!! 🕷️👑 ¡${username} trae ${viewers} almas nuevas! ¡BIENVENIDOS, DEARIES! ♥♥♥`);
+  });
+  client.on('subscription', (channel, username) => {
+    client.say(channel, `¡¡${username} se suscribió!! 🕷️ ¡Gracias dearie! 👑♥`);
+  });
+  client.on('resub', (channel, username, months) => {
+    client.say(channel, `¡¡${username} lleva ${months} meses!! 🕷️ ¡Eres de los más leales, dearie! 👑♥`);
+  });
+  client.on('subgift', (channel, username, recipient) => {
+    client.say(channel, `¡¡${username} le regaló sub a ${recipient}!! 🕷️ ¡Qué generoso/a! 👑♥`);
+  });
+}
+
+// ══════════════════════════════════════════
+//  ARRANQUE PRINCIPAL
+// ══════════════════════════════════════════
+async function start() {
+  console.log('🐻🕷️ MuffetBot Multi-Canal iniciando...');
+
+  const channels = await loadAllChannels();
+
+  if (channels.length === 0) {
+    console.log('⚠️ No hay canales aprobados. Esperando...');
+  }
+
+  // Asegurar que el canal principal siempre esté
+  const mainChannel = process.env.TWITCH_CHANNEL || 'elosoking1';
+  if (!channels.includes(mainChannel)) channels.push(mainChannel);
+
+  mainClient = createMainClient(channels);
+  setupEvents(mainClient);
+
+  await mainClient.connect();
+  console.log(`🐻🕷️ Conectado a ${channels.length} canales: ${channels.join(', ')}`);
+
+  // Auto mensajes por canal
+  setInterval(() => {
+    for (const [ch, config] of Object.entries(channelConfigs)) {
+      if (!muffetActiveMap[ch]) continue;
+      if (config.auto_messages?.length > 0) {
+        const msg = config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)];
+        mainClient.say(`#${ch}`, msg).catch(() => {});
+      }
+    }
+  }, 20 * 60 * 1000);
+
+  // Recargar config cada 2 minutos
+  setInterval(async () => {
+    await loadAllChannels();
+    // Unirse a canales nuevos si los hay
+    const currentChannels = mainClient.getChannels().map(c => c.replace('#',''));
+    const allChannels = Object.keys(channelConfigs);
+    for (const ch of allChannels) {
+      if (!currentChannels.includes(ch)) {
+        try {
+          await mainClient.join(ch);
+          console.log(`✅ Nuevo canal unido: ${ch}`);
+        } catch(e) {}
+      }
+    }
+  }, 2 * 60 * 1000);
+}
+
+start().catch(console.error);
