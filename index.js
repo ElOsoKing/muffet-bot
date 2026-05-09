@@ -60,7 +60,7 @@ setInterval(loadConfig, 2 * 60 * 1000);
 async function getMuffetResponse(userMessage, username) {
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'llama3-8b-8192',
       messages: [
         { role: 'system', content: config.bot_prompt },
         { role: 'user', content: `El usuario "${username}" dice: ${userMessage}` }
@@ -173,7 +173,11 @@ client.on('message', async (channel, tags, message, self) => {
 
   // ── Comandos dinámicos ──
   if (config.commands?.[firstWord]) {
-    client.say(channel, config.commands[firstWord]);
+    const args = message.trim().split(" ").slice(1);
+    const touser = args[0] ? args[0].replace("@","") : username;
+    let resp = config.commands[firstWord];
+    resp = resp.replace(/\{touser\}/g, touser).replace(/\{user\}/g, username);
+    client.say(channel, resp);
     return;
   }
 
