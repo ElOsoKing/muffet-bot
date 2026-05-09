@@ -57,6 +57,56 @@ async function loadConfig() {
 }
 setInterval(loadConfig, 2 * 60 * 1000);
 
+// ── Registrar uso de comandos ──
+let statsBuffer = {}; // acumula stats en memoria
+let statsFlushTimer = null;
+
+function trackCommandUse(trigger) {
+  statsBuffer[trigger] = (statsBuffer[trigger] || 0) + 1;
+  // Flush a Supabase cada 30 segundos para no hacer muchas llamadas
+  if (!statsFlushTimer) {
+    statsFlushTimer = setTimeout(flushStats, 30000);
+  }
+}
+
+async function flushStats() {
+  statsFlushTimer = null;
+  if (Object.keys(statsBuffer).length === 0) return;
+  try {
+    // Primero leer stats actuales
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${TWITCH_CHANNEL}&limit=1`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const data = await res.json();
+    const current = (data && data[0] && data[0].command_stats) || {};
+
+    // Sumar los nuevos usos
+    const updated = { ...current };
+    for (const [cmd, count] of Object.entries(statsBuffer)) {
+      updated[cmd] = (updated[cmd] || 0) + count;
+    }
+    statsBuffer = {};
+
+    // Guardar en Supabase
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${TWITCH_CHANNEL}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ command_stats: updated })
+      }
+    );
+    console.log('📊 Stats actualizadas:', updated);
+  } catch (err) {
+    console.error('Error guardando stats:', err.message);
+  }
+}
+
 async function getMuffetResponse(userMessage, username) {
   try {
     const completion = await groq.chat.completions.create({
@@ -174,6 +224,8 @@ client.on('message', async (channel, tags, message, self) => {
   // ── Comandos dinámicos ──
   // ── Comandos dinámicos con permisos ──
   if (config.commands?.[firstWord]) {
+    // Registrar uso del comando en stats
+    trackCommandUse(firstWord);
     const cmd = config.commands[firstWord];
     const response = typeof cmd === 'object' ? cmd.response : cmd;
     const perms = typeof cmd === 'object' && cmd.perms ? cmd.perms : ['everyone'];
