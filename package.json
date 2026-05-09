@@ -1,0 +1,16 @@
+{
+  "name": "muffet-bot",
+  "version": "1.0.0",
+  "description": "🕷️ Bot de Twitch con personalidad de Muffet (Undertale) para ElOsoKing1",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "tmi.js": "^1.8.5",
+    "groq-sdk": "^0.3.3"
+  }
+}
