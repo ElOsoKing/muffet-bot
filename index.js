@@ -385,6 +385,102 @@ async function handleMessage(client, channel, tags, message, self) {
     return;
   }
 
+  // ── Sorteo ──
+  if (firstWord === '!sorteo') {
+    const subCmd = msgLower.split(' ')[1];
+    if (subCmd === 'crear' || subCmd === 'start') {
+      if (!isMod(tags, channelName)) return;
+      const prize = message.trim().split(' ').slice(2).join(' ') || 'Sorpresa';
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raffle_active: { active: true, prize, participants: [], started_at: new Date().toISOString() } })
+        });
+        const joinCmd = channelConfigs[channelName]?.raffle_settings?.join_cmd || '!entrar';
+        client.say(channel, `🎉 ¡Sorteo iniciado! Premio: ${prize} 🏆 Escribe ${joinCmd} para participar~ 🕷️`);
+      } catch(e) { client.say(channel, '⚠️ Error al iniciar el sorteo'); }
+      return;
+    }
+    if (subCmd === 'end' || subCmd === 'fin') {
+      if (!isMod(tags, channelName)) return;
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const data = await res.json();
+        const raffle = data?.[0]?.raffle_active || {};
+        const participants = raffle.participants || [];
+        if (!participants.length) { client.say(channel, '⚠️ No hay participantes en el sorteo~ 🕷️'); return; }
+        const winner = participants[Math.floor(Math.random() * participants.length)];
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raffle_active: { active: false, prize: raffle.prize, winner, participants: [] } })
+        });
+        client.say(channel, `🏆 ¡El ganador del sorteo es @${winner}! 🎉 Premio: ${raffle.prize} ¡Felicidades, dearie! 🕷️♥`);
+      } catch(e) { client.say(channel, '⚠️ Error al terminar el sorteo'); }
+      return;
+    }
+    if (subCmd === 'cancel' || subCmd === 'cancelar') {
+      if (!isMod(tags, channelName)) return;
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raffle_active: { active: false } })
+      });
+      client.say(channel, '❌ Sorteo cancelado~ 🕷️');
+      return;
+    }
+    if (subCmd === 'info') {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const data = await res.json();
+        const raffle = data?.[0]?.raffle_active || {};
+        if (!raffle.active) { client.say(channel, '🎉 No hay sorteo activo~ 🕷️'); return; }
+        client.say(channel, `🎉 Sorteo activo | Premio: ${raffle.prize} | Participantes: ${(raffle.participants||[]).length} 🕷️`);
+      } catch(e) {}
+      return;
+    }
+  }
+
+  // ── Entrar al sorteo ──
+  const raffleConfig = channelConfigs[channelName];
+  const joinCmd = raffleConfig?.raffle_settings?.join_cmd || '!entrar';
+  if (firstWord === joinCmd || firstWord === '!entrar') {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const raffle = data?.[0]?.raffle_active || {};
+      if (!raffle.active) return;
+
+      const participants = raffle.participants || [];
+      if (participants.includes(username)) { client.say(channel, `@${username} ¡Ya estás participando, dearie! 🕷️`); return; }
+
+      // Verificar permisos
+      const allowed = raffleConfig?.raffle_settings?.allowed || ['everyone'];
+      if (!allowed.includes('everyone')) {
+        const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+        const isVIP = !!tags.badges?.vip;
+        const isModUser = isMod(tags, channelName);
+        const canJoin = (allowed.includes('sub') && isSub) || (allowed.includes('vip') && isVIP) || (allowed.includes('mod') && isModUser);
+        if (!canJoin) {
+          const reqLabels = { sub:'suscriptores', vip:'VIPs', mod:'moderadores' };
+          const req = allowed.map(p => reqLabels[p] || p).join(' y ');
+          client.say(channel, `@${username} Este sorteo es solo para ${req}~ 🕷️`);
+          return;
+        }
+      }
+
+      participants.push(username);
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raffle_active: { ...raffle, participants } })
+      });
+      client.say(channel, `✅ @${username} ¡Entraste al sorteo! Somos ${participants.length} participantes 🎉🕷️`);
+    } catch(e) {}
+    return;
+  }
+
   // ── !redes automático ──
   if (firstWord === '!redes') {
     const socials = formatSocials(config?.social_links || {});
