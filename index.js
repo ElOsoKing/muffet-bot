@@ -673,14 +673,9 @@ async function start() {
   const autoMsgIntervals = {};
 
   function scheduleAutoMessages() {
-    // Limpiar timers existentes
-    for (const timers of Object.values(autoMsgIntervals)) {
-      timers.forEach(t => clearInterval(t));
-    }
-    for (const ch of Object.keys(autoMsgIntervals)) delete autoMsgIntervals[ch];
-
     for (const [ch, config] of Object.entries(channelConfigs)) {
       if (!config.auto_messages?.length) continue;
+      if (autoMsgIntervals[ch]) continue; // Ya tiene timers, no recrear
       autoMsgIntervals[ch] = [];
 
       config.auto_messages.forEach(msg => {
