@@ -684,6 +684,7 @@ async function start() {
         const type     = typeof msg === 'object' ? msg.type     : 'fixed';
         const interval = typeof msg === 'object' ? msg.interval : (config.auto_message_interval || 20);
         const intervalMs = Math.max(interval, 5) * 60 * 1000;
+        console.log(`⏰ Timer: #${ch} → "${text.substring(0,30)}..." cada ${Math.max(interval,5)} min`);
 
         const timer = setInterval(async () => {
           if (muffetActiveMap[ch] === false) return;
