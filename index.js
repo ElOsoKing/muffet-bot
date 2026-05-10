@@ -696,7 +696,6 @@ async function start() {
           const client = customClients[ch] || mainClient;
           try {
             if (type === 'ai') {
-              // Muffet inventa el mensaje basado en el tema
               const chConfig = channelConfigs[ch];
               const aiMsg = await groq.chat.completions.create({
                 model: 'llama-3.1-8b-instant',
@@ -708,12 +707,15 @@ async function start() {
                 temperature: 0.9,
               });
               const aiText = aiMsg.choices[0]?.message?.content || text;
-              client.say(`#${ch}`, aiText).catch(() => {});
+              console.log(`📨 Auto msg IA → #${ch}: ${aiText.substring(0,50)}`);
+              client.say(`#${ch}`, aiText).catch(e => console.error(`❌ Error say #${ch}:`, e.message));
             } else {
-              client.say(`#${ch}`, text).catch(() => {});
+              console.log(`📨 Auto msg → #${ch}: ${text.substring(0,50)}`);
+              client.say(`#${ch}`, text).catch(e => console.error(`❌ Error say #${ch}:`, e.message));
             }
           } catch(e) {
-            client.say(`#${ch}`, text).catch(() => {});
+            console.error(`❌ Error auto msg #${ch}:`, e.message);
+            client.say(`#${ch}`, text).catch(e2 => console.error(`❌ Fallback error:`, e2.message));
           }
         }, intervalMs);
 
