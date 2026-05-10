@@ -317,6 +317,58 @@ async function handleMessage(client, channel, tags, message, self) {
     }
   }
 
+  // ── !titulo — cambiar título del stream ──
+  if (firstWord === '!titulo' || firstWord === '!title') {
+    if (!isMod(tags, channelName)) return;
+    const newTitle = message.trim().slice(firstWord.length).trim();
+    if (!newTitle) { client.say(channel, `@${username} Uso: !titulo Mi nuevo título 🕷️`); return; }
+    if (newTitle.length > 140) { client.say(channel, `@${username} El título es muy largo, máximo 140 caracteres~ 🕷️`); return; }
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const token = data?.[0]?.access_token;
+      const twitchId = data?.[0]?.twitch_id;
+      if (!token) { client.say(channel, `@${username} Sin token de Twitch~ 🕷️`); return; }
+      const r = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${twitchId}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle })
+      });
+      if (r.status === 204) client.say(channel, `✅ Título actualizado: "${newTitle}" 🕷️👑`);
+      else client.say(channel, `@${username} Error al cambiar el título — intenta reconectar el dashboard~ 🕷️`);
+    } catch(e) { client.say(channel, `@${username} Error al conectar con Twitch~ 🕷️`); }
+    return;
+  }
+
+  // ── !juego — cambiar categoría del stream ──
+  if (firstWord === '!juego' || firstWord === '!game') {
+    if (!isMod(tags, channelName)) return;
+    const gameName = message.trim().slice(firstWord.length).trim();
+    if (!gameName) { client.say(channel, `@${username} Uso: !juego Minecraft 🕷️`); return; }
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const token = data?.[0]?.access_token;
+      const twitchId = data?.[0]?.twitch_id;
+      if (!token) { client.say(channel, `@${username} Sin token de Twitch~ 🕷️`); return; }
+      // Buscar el juego
+      const searchRes = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(gameName)}&first=1`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' }
+      });
+      const searchData = await searchRes.json();
+      const game = searchData?.data?.[0];
+      if (!game) { client.say(channel, `@${username} No encontré ese juego, dearie~ 🕷️ Intenta con otro nombre`); return; }
+      const r = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${twitchId}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game_id: game.id })
+      });
+      if (r.status === 204) client.say(channel, `✅ Categoría cambiada a: ${game.name} 🎮🕷️`);
+      else client.say(channel, `@${username} Error al cambiar la categoría~ 🕷️`);
+    } catch(e) { client.say(channel, `@${username} Error al conectar con Twitch~ 🕷️`); }
+    return;
+  }
+
   // ── Gestión de comandos desde el chat ──
   if (firstWord === '!addcmd' || firstWord === '!editcmd') {
     if (!isMod(tags, channelName)) return;
