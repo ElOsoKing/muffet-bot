@@ -370,22 +370,58 @@ async function start() {
   // Configurar bots personalizados para usuarios Pro
   await setupCustomBots();
 
-  // Auto mensajes por canal con intervalo personalizado
+  // Auto mensajes por canal con timer individual por mensaje
   const autoMsgIntervals = {};
+
   function scheduleAutoMessages() {
+    // Limpiar timers existentes
+    for (const timers of Object.values(autoMsgIntervals)) {
+      timers.forEach(t => clearInterval(t));
+    }
+    for (const ch of Object.keys(autoMsgIntervals)) delete autoMsgIntervals[ch];
+
     for (const [ch, config] of Object.entries(channelConfigs)) {
-      if (autoMsgIntervals[ch]) clearInterval(autoMsgIntervals[ch]);
-      const intervalMs = (config.auto_message_interval || 20) * 60 * 1000;
-      autoMsgIntervals[ch] = setInterval(() => {
-        if (muffetActiveMap[ch] === false) return;
-        if (config.auto_messages?.length > 0) {
-          const msg = config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)];
+      if (!config.auto_messages?.length) continue;
+      autoMsgIntervals[ch] = [];
+
+      config.auto_messages.forEach(msg => {
+        // Soportar formato antiguo (string) y nuevo (objeto)
+        const text     = typeof msg === 'object' ? msg.text     : msg;
+        const type     = typeof msg === 'object' ? msg.type     : 'fixed';
+        const interval = typeof msg === 'object' ? msg.interval : (config.auto_message_interval || 20);
+        const intervalMs = Math.max(interval, 5) * 60 * 1000;
+
+        const timer = setInterval(async () => {
+          if (muffetActiveMap[ch] === false) return;
           const client = customClients[ch] || mainClient;
-          client.say(`#${ch}`, msg).catch(() => {});
-        }
-      }, intervalMs);
+          try {
+            if (type === 'ai') {
+              // Muffet inventa el mensaje basado en el tema
+              const chConfig = channelConfigs[ch];
+              const aiMsg = await groq.chat.completions.create({
+                model: 'llama-3.1-8b-instant',
+                messages: [
+                  { role: 'system', content: chConfig.bot_prompt },
+                  { role: 'user', content: `Escribe un mensaje corto para el chat de Twitch sobre este tema: "${text}". Máximo 1 oración, con tu personalidad característica.` }
+                ],
+                max_tokens: 100,
+                temperature: 0.9,
+              });
+              const aiText = aiMsg.choices[0]?.message?.content || text;
+              client.say(`#${ch}`, aiText).catch(() => {});
+            } else {
+              client.say(`#${ch}`, text).catch(() => {});
+            }
+          } catch(e) {
+            client.say(`#${ch}`, text).catch(() => {});
+          }
+        }, intervalMs);
+
+        autoMsgIntervals[ch].push(timer);
+      });
     }
   }
+
   scheduleAutoMessages();
 
   // Recargar config cada 2 minutos
