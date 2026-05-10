@@ -299,7 +299,73 @@ async function handleMessage(client, channel, tags, message, self) {
     }
   }
 
-  // ── !ask / !pregunta ──
+  // ── Gestión de comandos desde el chat ──
+  if (firstWord === '!addcmd' || firstWord === '!editcmd') {
+    if (!isMod(tags, channelName)) return;
+    const parts = message.trim().split(' ');
+    const trigger = parts[1]?.toLowerCase();
+    const response = parts.slice(2).join(' ').trim();
+    if (!trigger || !response) {
+      client.say(channel, `@${username} Uso: !addcmd !comando respuesta del bot 🕷️`);
+      return;
+    }
+    if (!trigger.startsWith('!')) {
+      client.say(channel, `@${username} El comando debe empezar con ! dearie~ 🕷️`);
+      return;
+    }
+    // Guardar en Supabase
+    const config = channelConfigs[channelName];
+    const commands = { ...(config.commands || {}) };
+    commands[trigger] = { response, perms: ['everyone'] };
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commands })
+      });
+      channelConfigs[channelName].commands = commands;
+      const action = firstWord === '!addcmd' ? 'creado' : 'editado';
+      client.say(channel, `✅ Comando ${trigger} ${action} correctamente~ 🕷️`);
+    } catch(e) {
+      client.say(channel, `@${username} Error al guardar el comando 🕷️`);
+    }
+    return;
+  }
+
+  if (firstWord === '!delcmd') {
+    if (!isMod(tags, channelName)) return;
+    const trigger = message.trim().split(' ')[1]?.toLowerCase();
+    if (!trigger) {
+      client.say(channel, `@${username} Uso: !delcmd !comando 🕷️`);
+      return;
+    }
+    const config = channelConfigs[channelName];
+    const commands = { ...(config.commands || {}) };
+    if (!commands[trigger]) {
+      client.say(channel, `@${username} El comando ${trigger} no existe, dearie~ 🕷️`);
+      return;
+    }
+    delete commands[trigger];
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commands })
+      });
+      channelConfigs[channelName].commands = commands;
+      client.say(channel, `🗑️ Comando ${trigger} eliminado~ 🕷️`);
+    } catch(e) {
+      client.say(channel, `@${username} Error al eliminar el comando 🕷️`);
+    }
+    return;
+  }
+
+  if (firstWord === '!cmds' || firstWord === '!comandos') {
+    const config = channelConfigs[channelName];
+    const cmds = Object.keys(config.commands || {}).join(' • ');
+    client.say(channel, cmds ? `📋 Comandos: ${cmds} 🕷️` : `No hay comandos configurados aún~ 🕷️`);
+    return;
+  }
   if (firstWord === '!ask' || firstWord === '!pregunta') {
     if (!config.ai_enabled) { client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️`); return; }
     const question = message.trim().slice(firstWord.length).trim();
