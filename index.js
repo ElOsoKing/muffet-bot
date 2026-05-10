@@ -57,6 +57,7 @@ async function loadAllChannels() {
         banned_words:  s.banned_words  || [],
         warn_message:  s.warn_message  || '⚠️ Cuidado, dearie~ 🕷️',
         plan:          s.plan          || 'free',
+        social_links:  s.social_links  || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -138,12 +139,29 @@ async function checkMessageWithAI(message) {
   }
 }
 
+// ── Formatear links de redes ──
+function formatSocials(social_links) {
+  const icons = { twitch:'🎮', youtube:'📺', tiktok:'🎵', twitter:'🐦', instagram:'📸', discord:'💬', youtube_channel:'▶️' };
+  const labels = { twitch:'Twitch', youtube:'YouTube', tiktok:'TikTok', twitter:'Twitter', instagram:'Instagram', discord:'Discord', youtube_channel:'YouTube' };
+  return Object.entries(social_links)
+    .filter(([,v]) => v)
+    .map(([k,v]) => `${icons[k]||'🔗'} ${labels[k]||k}: ${v}`)
+    .join(' | ');
+}
+
 // ── Resolver variables dinámicas ──
 async function resolveVariables(text, channelName, username, touser) {
   let result = text;
   result = result.replace(/\{user\}/g, username);
   result = result.replace(/\{touser\}/g, touser || username);
   result = result.replace(/\{channel\}/g, channelName);
+
+  // Variable {redes}
+  const config = channelConfigs[channelName];
+  if (result.includes('{redes}')) {
+    const socials = formatSocials(config?.social_links || {});
+    result = result.replace(/\{redes\}/g, socials || 'Sin redes configuradas');
+  }
 
   // Variables que requieren llamada a la API de Twitch
   if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}')) {
@@ -366,6 +384,22 @@ async function handleMessage(client, channel, tags, message, self) {
     client.say(channel, cmds ? `📋 Comandos: ${cmds} 🕷️` : `No hay comandos configurados aún~ 🕷️`);
     return;
   }
+
+  // ── !redes automático ──
+  if (firstWord === '!redes') {
+    const socials = formatSocials(config?.social_links || {});
+    if (socials) {
+      client.say(channel, `🌐 Redes de ${channelName}: ${socials} 🕷️♥`);
+    } else if (config?.commands?.['!redes']) {
+      const cmd = config.commands['!redes'];
+      const response = typeof cmd === 'object' ? cmd.response : cmd;
+      client.say(channel, response);
+    } else {
+      client.say(channel, `@${username} No hay redes configuradas aún~ 🕷️`);
+    }
+    return;
+  }
+
   if (firstWord === '!ask' || firstWord === '!pregunta') {
     if (!config.ai_enabled) { client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️`); return; }
     const question = message.trim().slice(firstWord.length).trim();
