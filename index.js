@@ -138,9 +138,54 @@ async function checkMessageWithAI(message) {
   }
 }
 
-// ══════════════════════════════════════════
-//  RESPUESTA DE IA
-// ══════════════════════════════════════════
+// ── Resolver variables dinámicas ──
+async function resolveVariables(text, channelName, username, touser) {
+  let result = text;
+  result = result.replace(/\{user\}/g, username);
+  result = result.replace(/\{touser\}/g, touser || username);
+  result = result.replace(/\{channel\}/g, channelName);
+
+  // Variables que requieren llamada a la API de Twitch
+  if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}')) {
+    try {
+      // Buscar el access token del canal
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      );
+      const data = await res.json();
+      const token = data?.[0]?.access_token;
+
+      if (token) {
+        const streamRes = await fetch(
+          `https://api.twitch.tv/helix/streams?user_login=${channelName}`,
+          { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
+        );
+        const streamData = await streamRes.json();
+        const stream = streamData?.data?.[0];
+
+        if (stream) {
+          result = result.replace(/\{game\}/g, stream.game_name || 'un juego');
+          result = result.replace(/\{title\}/g, stream.title || 'sin título');
+          // Calcular uptime
+          const start = new Date(stream.started_at);
+          const diff = Math.floor((Date.now() - start) / 1000);
+          const h = Math.floor(diff / 3600);
+          const m = Math.floor((diff % 3600) / 60);
+          const uptime = h > 0 ? `${h}h ${m}m` : `${m}m`;
+          result = result.replace(/\{uptime\}/g, uptime);
+        } else {
+          result = result.replace(/\{game\}/g, 'offline');
+          result = result.replace(/\{title\}/g, 'sin stream');
+          result = result.replace(/\{uptime\}/g, '0m');
+        }
+      }
+    } catch(e) {
+      result = result.replace(/\{game\}/g, '?').replace(/\{title\}/g, '?').replace(/\{uptime\}/g, '?');
+    }
+  }
+  return result;
+}
 async function getMuffetResponse(channel, userMessage, username) {
   try {
     const config = channelConfigs[channel] || defaultConfig(channel);
@@ -284,7 +329,8 @@ async function handleMessage(client, channel, tags, message, self) {
 
     const args = message.trim().split(' ').slice(1);
     const touser = args[0] ? args[0].replace('@', '') : username;
-    client.say(channel, response.replace(/\{touser\}/g, touser).replace(/\{user\}/g, username));
+    const resolved = await resolveVariables(response, channelName, username, touser);
+    client.say(channel, resolved);
     return;
   }
 
