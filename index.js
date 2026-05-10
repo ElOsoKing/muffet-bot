@@ -51,6 +51,7 @@ async function loadAllChannels() {
         bot_prompt:    s.bot_prompt    || defaultConfig(ch).bot_prompt,
         commands:      s.commands      || defaultConfig(ch).commands,
         auto_messages: s.auto_messages || defaultConfig(ch).auto_messages,
+        auto_message_interval: s.auto_message_interval || 20,
         ai_enabled:    s.ai_enabled    !== undefined ? s.ai_enabled  : true,
         mod_enabled:   s.mod_enabled   !== undefined ? s.mod_enabled : false,
         banned_words:  s.banned_words  || [],
@@ -369,30 +370,34 @@ async function start() {
   // Configurar bots personalizados para usuarios Pro
   await setupCustomBots();
 
-  // Auto mensajes por canal
-  setInterval(() => {
+  // Auto mensajes por canal con intervalo personalizado
+  const autoMsgIntervals = {};
+  function scheduleAutoMessages() {
     for (const [ch, config] of Object.entries(channelConfigs)) {
-      if (muffetActiveMap[ch] === false) continue;
-      if (config.auto_messages?.length > 0) {
-        const msg = config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)];
-        mainClient.say(`#${ch}`, msg).catch(() => {});
-      }
+      if (autoMsgIntervals[ch]) clearInterval(autoMsgIntervals[ch]);
+      const intervalMs = (config.auto_message_interval || 20) * 60 * 1000;
+      autoMsgIntervals[ch] = setInterval(() => {
+        if (muffetActiveMap[ch] === false) return;
+        if (config.auto_messages?.length > 0) {
+          const msg = config.auto_messages[Math.floor(Math.random() * config.auto_messages.length)];
+          const client = customClients[ch] || mainClient;
+          client.say(`#${ch}`, msg).catch(() => {});
+        }
+      }, intervalMs);
     }
-  }, 20 * 60 * 1000);
+  }
+  scheduleAutoMessages();
 
   // Recargar config cada 2 minutos
   setInterval(async () => {
     await loadAllChannels();
     await setupCustomBots();
-    // Unirse a canales nuevos si los hay
+    scheduleAutoMessages();
     const currentChannels = mainClient.getChannels().map(c => c.replace('#',''));
     const allChannels = Object.keys(channelConfigs);
     for (const ch of allChannels) {
       if (!currentChannels.includes(ch) && !customClients[ch]) {
-        try {
-          await mainClient.join(ch);
-          console.log(`✅ Nuevo canal unido: ${ch}`);
-        } catch(e) {}
+        try { await mainClient.join(ch); console.log(`✅ Nuevo canal unido: ${ch}`); } catch(e) {}
       }
     }
   }, 2 * 60 * 1000);
