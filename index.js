@@ -66,6 +66,11 @@ async function loadAllChannels() {
     });
 
     console.log(`🐻🕷️ Config cargada para ${streamers.length} canales:`, streamers.map(s => s.twitch_username).join(', '));
+    // Debug auto_messages
+    streamers.forEach(s => {
+      const ch = s.twitch_username.toLowerCase();
+      console.log(`📨 ${ch} auto_messages:`, JSON.stringify(s.auto_messages)?.substring(0,100));
+    });
     return streamers.map(s => s.twitch_username.toLowerCase());
   } catch (err) {
     console.error('Error cargando canales:', err.message);
