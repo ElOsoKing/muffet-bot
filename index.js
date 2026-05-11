@@ -273,13 +273,15 @@ async function handleMessage(client, channel, tags, message, self) {
   if (firstWord === '!muffeton') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = true;
-    client.say(channel, `¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥`);
+    const onMsg = await getMuffetResponse(channelName, '¡Acabo de despertar y estoy lista para animar el chat! Saluda a los viewers con energía.', 'sistema');
+    client.say(channel, onMsg);
     return;
   }
   if (firstWord === '!muffetoff') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = false;
-    client.say(channel, `¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥`);
+    const offMsg = await getMuffetResponse(channelName, '¡Me voy a descansar un momento! Despídete del chat con estilo.', 'sistema');
+    client.say(channel, offMsg);
     return;
   }
   if (firstWord === '!muffetstatus') {
@@ -587,10 +589,12 @@ async function handleMessage(client, channel, tags, message, self) {
     return;
   }
 
-  // ── Menciones ──
-  if ((msgLower.includes('rey oso') || msgLower.includes('elosoking')) && !msgLower.startsWith('!')) {
+  // ── Menciones al bot directamente ──
+  const botUsername = (channelConfigs[channelName]?.custom_bot_username || TWITCH_BOT_USERNAME).toLowerCase();
+  if (msgLower.includes(`@${botUsername}`) && !msgLower.startsWith('!')) {
     if (!config.ai_enabled) return;
-    client.say(channel, `@${username} ${await getMuffetResponse(channelName, message, username)}`);
+    const question = message.replace(new RegExp(`@${botUsername}`, 'gi'), '').trim();
+    client.say(channel, `@${username} ${await getMuffetResponse(channelName, question || '¡Hola!', username)}`);
     return;
   }
 }
@@ -675,7 +679,7 @@ async function start() {
   function scheduleAutoMessages() {
     for (const [ch, config] of Object.entries(channelConfigs)) {
       if (!config.auto_messages?.length) continue;
-      if (autoMsgIntervals[ch]) continue; // Ya tiene timers, no recrear
+      if (autoMsgIntervals[ch]?.length) continue; // Ya tiene timers activos, no recrear
       autoMsgIntervals[ch] = [];
 
       config.auto_messages.forEach(msg => {
