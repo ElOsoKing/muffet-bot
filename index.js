@@ -278,7 +278,7 @@ async function handleMessage(client, channel, tags, message, self) {
     muffetActiveMap[channelName] = true;
     let onMsg;
     if (config.on_off_ai !== false) {
-      onMsg = await getMuffetResponse(channelName, '¡Acabo de despertar y estoy lista para animar el chat! Saluda a los viewers con energía.', 'sistema');
+      onMsg = await getMuffetResponse(channelName, 'Anuncia brevemente que acabas de activarte y estás lista para interactuar con el chat. Habla en primera persona según tu personalidad.', username);
     } else {
       onMsg = config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥';
     }
@@ -290,7 +290,7 @@ async function handleMessage(client, channel, tags, message, self) {
     muffetActiveMap[channelName] = false;
     let offMsg;
     if (config.on_off_ai !== false) {
-      offMsg = await getMuffetResponse(channelName, '¡Me voy a descansar un momento! Despídete del chat con estilo.', 'sistema');
+      offMsg = await getMuffetResponse(channelName, 'Anuncia brevemente que te vas a descansar y te despides del chat. Habla en primera persona según tu personalidad.', username);
     } else {
       offMsg = config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥';
     }
