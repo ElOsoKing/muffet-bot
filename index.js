@@ -172,6 +172,19 @@ async function resolveVariables(text, channelName, username, touser) {
     result = result.replace(/\{redes\}/g, socials || 'Sin redes configuradas');
   }
 
+  // Variable {random}, {random:max}, {random:min-max}
+  if (result.includes('{random')) {
+    result = result.replace(/\{random:(\d+)-(\d+)\}/g, (_, min, max) => {
+      return Math.floor(Math.random() * (parseInt(max) - parseInt(min) + 1)) + parseInt(min);
+    });
+    result = result.replace(/\{random:(\d+)\}/g, (_, max) => {
+      return Math.floor(Math.random() * parseInt(max)) + 1;
+    });
+    result = result.replace(/\{random\}/g, () => {
+      return Math.floor(Math.random() * 100) + 1;
+    });
+  }
+
   // Variable {count:nombre}
   if (result.includes('{count:')) {
     result = result.replace(/\{count:(\w+)\}/g, (match, name) => {
