@@ -57,6 +57,9 @@ async function loadAllChannels() {
         banned_words:  s.banned_words  || [],
         warn_message:  s.warn_message  || '⚠️ Cuidado, dearie~ 🕷️',
         plan:          s.plan          || 'free',
+        on_off_ai:     s.on_off_ai     !== false,
+        on_message:    s.on_message    || null,
+        off_message:   s.off_message   || null,
         social_links:  s.social_links  || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
@@ -273,14 +276,24 @@ async function handleMessage(client, channel, tags, message, self) {
   if (firstWord === '!muffeton') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = true;
-    const onMsg = await getMuffetResponse(channelName, '¡Acabo de despertar y estoy lista para animar el chat! Saluda a los viewers con energía.', 'sistema');
+    let onMsg;
+    if (config.on_off_ai !== false) {
+      onMsg = await getMuffetResponse(channelName, '¡Acabo de despertar y estoy lista para animar el chat! Saluda a los viewers con energía.', 'sistema');
+    } else {
+      onMsg = config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥';
+    }
     client.say(channel, onMsg);
     return;
   }
   if (firstWord === '!muffetoff') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = false;
-    const offMsg = await getMuffetResponse(channelName, '¡Me voy a descansar un momento! Despídete del chat con estilo.', 'sistema');
+    let offMsg;
+    if (config.on_off_ai !== false) {
+      offMsg = await getMuffetResponse(channelName, '¡Me voy a descansar un momento! Despídete del chat con estilo.', 'sistema');
+    } else {
+      offMsg = config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥';
+    }
     client.say(channel, offMsg);
     return;
   }
