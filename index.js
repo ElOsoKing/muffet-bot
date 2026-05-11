@@ -398,6 +398,81 @@ async function handleMessage(client, channel, tags, message, self) {
     return;
   }
 
+  // ── !clip ──
+  if (firstWord === '!clip') {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const token = data?.[0]?.access_token;
+      const twitchId = data?.[0]?.twitch_id;
+      if (!token) { client.say(channel, `@${username} Sin token de Twitch~ 🕷️`); return; }
+
+      const clipRes = await fetch(`https://api.twitch.tv/helix/clips?broadcaster_id=${twitchId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' }
+      });
+      const clipData = await clipRes.json();
+
+      if (clipData.data?.[0]?.edit_url) {
+        const clipUrl = clipData.data[0].edit_url.replace('/edit', '');
+        client.say(channel, `✂️ ¡Clip creado por @${username}! ${clipUrl} 🕷️`);
+      } else {
+        client.say(channel, `@${username} No se pudo crear el clip — ¿el stream está en vivo? 🕷️`);
+      }
+    } catch(e) {
+      client.say(channel, `@${username} Error al crear el clip~ 🕷️`);
+    }
+    return;
+  }
+
+  // ── !random ──
+  if (firstWord === '!random' || firstWord === '!dado' || firstWord === '!ruleta') {
+    const parts = message.trim().split(' ').slice(1);
+    const subCmd = parts[0]?.toLowerCase();
+
+    // !random amor @usuario
+    if (subCmd === 'amor' || subCmd === 'love') {
+      const target = parts[1]?.replace('@','') || username;
+      const pct = Math.floor(Math.random() * 101);
+      const emoji = pct >= 80 ? '💕' : pct >= 50 ? '❤️' : pct >= 20 ? '💔' : '😬';
+      client.say(channel, `${emoji} @${username} tiene un ${pct}% de amor por ${target} ${emoji}`);
+      return;
+    }
+
+    // !random pick opcion1 opcion2 opcion3
+    if (subCmd === 'pick' || subCmd === 'elige') {
+      const options = parts.slice(1).filter(Boolean);
+      if (options.length < 2) { client.say(channel, `@${username} Uso: !random pick opcion1 opcion2 opcion3 🕷️`); return; }
+      const picked = options[Math.floor(Math.random() * options.length)];
+      client.say(channel, `🎯 @${username} La ruleta eligió: ${picked} 🕷️`);
+      return;
+    }
+
+    // !random 1 6 (entre dos números)
+    if (parts.length >= 2 && !isNaN(parseInt(parts[0])) && !isNaN(parseInt(parts[1]))) {
+      const min = parseInt(parts[0]);
+      const max = parseInt(parts[1]);
+      if (min >= max) { client.say(channel, `@${username} El primer número debe ser menor que el segundo~ 🕷️`); return; }
+      const result = Math.floor(Math.random() * (max - min + 1)) + min;
+      client.say(channel, `🎲 @${username} Número entre ${min} y ${max}: ${result} 🕷️`);
+      return;
+    }
+
+    // !random 50 (entre 1 y X)
+    if (parts.length === 1 && !isNaN(parseInt(parts[0]))) {
+      const max = Math.abs(parseInt(parts[0]));
+      const result = Math.floor(Math.random() * max) + 1;
+      client.say(channel, `🎲 @${username} Número entre 1 y ${max}: ${result} 🕷️`);
+      return;
+    }
+
+    // !random (entre 1 y 100)
+    const result = Math.floor(Math.random() * 100) + 1;
+    client.say(channel, `🎲 @${username} Número random: ${result} 🕷️`);
+    return;
+  }
+
   // ── Contadores ──
   // Uso: !deaths, !deaths +1, !deaths -1, !deaths reset, !deaths 5
   // Crear: !addcounter deaths, Borrar: !delcounter deaths
