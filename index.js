@@ -61,6 +61,8 @@ async function loadAllChannels() {
         on_message:    s.on_message    || null,
         off_message:   s.off_message   || null,
         counters:      s.counters      || {},
+        points_config: s.points_config || {},
+        viewer_points: s.viewer_points || {},
         social_links:  s.social_links  || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
@@ -408,6 +410,96 @@ async function handleMessage(client, channel, tags, message, self) {
       if (r.status === 204) client.say(channel, `✅ Categoría cambiada a: ${game.name} 🎮🕷️`);
       else client.say(channel, `@${username} Error al cambiar la categoría~ 🕷️`);
     } catch(e) { client.say(channel, `@${username} Error al conectar con Twitch~ 🕷️`); }
+    return;
+  }
+
+  // ── Sistema de puntos y niveles ──
+  const pointsConfig = config.points_config || {};
+  const pointsEnabled = pointsConfig.enabled !== false;
+
+  if (pointsEnabled && !self) {
+    // Dar XP por mensaje
+    const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+    const isVIP = !!tags.badges?.vip;
+    const xpGain = isSub || isVIP ? (pointsConfig.xp_bonus || 2) : (pointsConfig.xp_per_message || 1);
+
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const userLower = username.toLowerCase();
+    const currentXP = viewerPoints[userLower] || 0;
+    const newXP = currentXP + xpGain;
+
+    // Verificar subida de nivel
+    const levels = pointsConfig.levels || [{level:1,name:'Súbdito',xp:0},{level:2,name:'Caballero',xp:100},{level:3,name:'Noble',xp:300},{level:4,name:'Lord',xp:600},{level:5,name:'Rey',xp:1000}];
+    const oldLevel = levels.filter(l => currentXP >= l.xp).pop();
+    const newLevel = levels.filter(l => newXP >= l.xp).pop();
+
+    if (newLevel && oldLevel && newLevel.level > oldLevel.level) {
+      const emoji = pointsConfig.emoji || '🏆';
+      setTimeout(() => client.say(channel, `🎉 ¡@${username} subió al nivel ${newLevel.level} — ${newLevel.name}! ${emoji}`), 1000);
+    }
+
+    // Guardar XP
+    viewerPoints[userLower] = newXP;
+    channelConfigs[channelName].viewer_points = viewerPoints;
+
+    // Flush a Supabase cada 60 segundos
+    if (!channelConfigs[channelName]._pointsFlushTimer) {
+      channelConfigs[channelName]._pointsFlushTimer = setTimeout(async () => {
+        channelConfigs[channelName]._pointsFlushTimer = null;
+        try {
+          await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+            method: 'PATCH',
+            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ viewer_points: channelConfigs[channelName].viewer_points })
+          });
+        } catch(e) {}
+      }, 60000);
+    }
+  }
+
+  // ── Comandos de puntos ──
+  if (firstWord === '!puntos' || firstWord === '!xp' || firstWord === '!nivel' || firstWord === '!level') {
+    const target = message.trim().split(' ')[1]?.replace('@','').toLowerCase() || username.toLowerCase();
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const xp = viewerPoints[target] || 0;
+    const pointsConfig = config.points_config || {};
+    const levels = pointsConfig.levels || [{level:1,name:'Súbdito',xp:0}];
+    const currentLevel = levels.filter(l => xp >= l.xp).pop() || levels[0];
+    const nextLevel = levels.find(l => l.xp > xp);
+    const emoji = pointsConfig.emoji || '🏆';
+    const name = pointsConfig.name || 'puntos';
+    const progress = nextLevel ? ` | Próximo nivel: ${nextLevel.xp - xp} ${name} más` : ' | ¡Nivel máximo!';
+    client.say(channel, `${emoji} @${target} — Nivel ${currentLevel.level} (${currentLevel.name}) | ${xp} ${name}${progress} 🕷️`);
+    return;
+  }
+
+  if (firstWord === '!top' || firstWord === '!ranking') {
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const pointsConfig = config.points_config || {};
+    const emoji = pointsConfig.emoji || '🏆';
+    const top5 = Object.entries(viewerPoints).sort((a,b) => b[1]-a[1]).slice(0,5);
+    if (!top5.length) { client.say(channel, `Aún no hay viewers con ${pointsConfig.name||'puntos'}~ 🕷️`); return; }
+    const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+    client.say(channel, `${emoji} Top 5: ${top5.map(([u,xp],i) => `${medals[i]} ${u}(${xp})`).join(' | ')} 🕷️`);
+    return;
+  }
+
+  if (firstWord === '!dar' || firstWord === '!give') {
+    if (!isMod(tags, channelName)) return;
+    const parts = message.trim().split(' ');
+    const amount = parseInt(parts[1]);
+    const target = parts[2]?.replace('@','').toLowerCase();
+    if (!amount || !target) { client.say(channel, `@${username} Uso: !dar 100 @usuario 🕷️`); return; }
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    viewerPoints[target] = (viewerPoints[target] || 0) + amount;
+    channelConfigs[channelName].viewer_points = viewerPoints;
+    const emoji = config.points_config?.emoji || '🏆';
+    client.say(channel, `✅ @${target} recibió ${amount} ${emoji} de @${username} 🕷️`);
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ viewer_points: viewerPoints })
+    }).catch(() => {});
     return;
   }
 
