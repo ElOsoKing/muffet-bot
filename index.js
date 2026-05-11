@@ -60,6 +60,7 @@ async function loadAllChannels() {
         on_off_ai:     s.on_off_ai     !== false,
         on_message:    s.on_message    || null,
         off_message:   s.off_message   || null,
+        counters:      s.counters      || {},
         social_links:  s.social_links  || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
@@ -169,6 +170,14 @@ async function resolveVariables(text, channelName, username, touser) {
   if (result.includes('{redes}')) {
     const socials = formatSocials(config?.social_links || {});
     result = result.replace(/\{redes\}/g, socials || 'Sin redes configuradas');
+  }
+
+  // Variable {count:nombre}
+  if (result.includes('{count:')) {
+    result = result.replace(/\{count:(\w+)\}/g, (match, name) => {
+      const val = config?.counters?.[name.toLowerCase()];
+      return val !== undefined ? val : '0';
+    });
   }
 
   // Variables que requieren llamada a la API de Twitch
@@ -386,6 +395,85 @@ async function handleMessage(client, channel, tags, message, self) {
       if (r.status === 204) client.say(channel, `✅ Categoría cambiada a: ${game.name} 🎮🕷️`);
       else client.say(channel, `@${username} Error al cambiar la categoría~ 🕷️`);
     } catch(e) { client.say(channel, `@${username} Error al conectar con Twitch~ 🕷️`); }
+    return;
+  }
+
+  // ── Contadores ──
+  // Uso: !deaths, !deaths +1, !deaths -1, !deaths reset, !deaths 5
+  // Crear: !addcounter deaths, Borrar: !delcounter deaths
+  if (firstWord === '!addcounter') {
+    if (!isMod(tags, channelName)) return;
+    const name = message.trim().split(' ')[1]?.toLowerCase();
+    if (!name) { client.say(channel, `@${username} Uso: !addcounter nombre 🕷️`); return; }
+    const counters = { ...(channelConfigs[channelName].counters || {}) };
+    counters[name] = 0;
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ counters })
+      });
+      channelConfigs[channelName].counters = counters;
+      client.say(channel, `✅ Contador !${name} creado (valor: 0) 🕷️`);
+    } catch(e) { client.say(channel, `@${username} Error al crear contador 🕷️`); }
+    return;
+  }
+
+  if (firstWord === '!delcounter') {
+    if (!isMod(tags, channelName)) return;
+    const name = message.trim().split(' ')[1]?.toLowerCase();
+    if (!name) { client.say(channel, `@${username} Uso: !delcounter nombre 🕷️`); return; }
+    const counters = { ...(channelConfigs[channelName].counters || {}) };
+    if (counters[name] === undefined) { client.say(channel, `@${username} El contador !${name} no existe~ 🕷️`); return; }
+    delete counters[name];
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ counters })
+      });
+      channelConfigs[channelName].counters = counters;
+      client.say(channel, `🗑️ Contador !${name} eliminado 🕷️`);
+    } catch(e) { client.say(channel, `@${username} Error al eliminar contador 🕷️`); }
+    return;
+  }
+
+  // Usar contador existente
+  const counterName = firstWord.startsWith('!') ? firstWord.slice(1).toLowerCase() : null;
+  const counters = channelConfigs[channelName]?.counters || {};
+  if (counterName && counters[counterName] !== undefined) {
+    if (!isMod(tags, channelName) && message.trim().split(' ').length > 1) return; // Solo mods pueden modificar
+    const parts = message.trim().split(' ');
+    const arg = parts[1]?.toLowerCase();
+    let value = counters[counterName];
+
+    if (!arg) {
+      // Solo mostrar el valor
+      client.say(channel, `📊 ${counterName}: ${value} 🕷️`);
+    } else if (arg === '+1' || arg === 'add' || arg === '+') {
+      value++;
+      client.say(channel, `📊 ${counterName}: ${value} (+1) 🕷️`);
+    } else if (arg === '-1' || arg === 'sub' || arg === '-') {
+      value = Math.max(0, value - 1);
+      client.say(channel, `📊 ${counterName}: ${value} (-1) 🕷️`);
+    } else if (arg === 'reset' || arg === '0') {
+      value = 0;
+      client.say(channel, `🔄 ${counterName} reiniciado a 0 🕷️`);
+    } else if (!isNaN(parseInt(arg))) {
+      value = parseInt(arg);
+      client.say(channel, `📊 ${counterName}: ${value} 🕷️`);
+    } else {
+      client.say(channel, `📊 ${counterName}: ${value} 🕷️`);
+    }
+
+    // Guardar nuevo valor
+    const newCounters = { ...counters, [counterName]: value };
+    channelConfigs[channelName].counters = newCounters;
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ counters: newCounters })
+    }).catch(() => {});
     return;
   }
 
