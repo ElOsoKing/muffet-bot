@@ -360,6 +360,46 @@ async function handleMessage(client, channel, tags, message, self) {
     }
   }
 
+  // ── Refresh token de Spotify ──
+async function getSpotifyToken(channelName) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await res.json();
+    const streamer = data?.[0];
+    if (!streamer?.spotify_token) return null;
+
+    // Probar el token actual
+    const test = await fetch('https://api.spotify.com/v1/me', {
+      headers: { 'Authorization': `Bearer ${streamer.spotify_token}` }
+    });
+
+    if (test.status === 401 && streamer.spotify_refresh) {
+      // Token expirado — refrescar
+      const refreshRes = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': 'Basic ' + Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString('base64')
+        },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: streamer.spotify_refresh }).toString()
+      });
+      const refreshData = await refreshRes.json();
+      if (refreshData.access_token) {
+        // Guardar nuevo token
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spotify_token: refreshData.access_token })
+        });
+        console.log(`🎵 Token de Spotify renovado para ${channelName}`);
+        return refreshData.access_token;
+      }
+    }
+    return streamer.spotify_token;
+  } catch(e) { return null; }
+}
+
   // ── Spotify ──
   if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
     try {
@@ -370,7 +410,9 @@ async function handleMessage(client, channel, tags, message, self) {
       const spotifyConfig = streamer?.spotify_config || {};
 
       if (!spotifyConfig.enabled) return;
-      if (!streamer?.spotify_token) { client.say(channel, `@${username} Spotify no está conectado~ 🎵`); return; }
+
+      const token = await getSpotifyToken(channelName);
+      if (!token) { client.say(channel, `@${username} Spotify no está conectado~ 🎵`); return; }
 
       // Verificar permisos
       const allowed = spotifyConfig.allowed || ['everyone'];
@@ -391,7 +433,7 @@ async function handleMessage(client, channel, tags, message, self) {
       // !cancion actual — ver qué suena
       if (!query || query === 'actual' || query === 'now') {
         const r = await fetch('https://api.spotify.com/v1/me/player/currently-playing',
-          { headers: { 'Authorization': `Bearer ${streamer.spotify_token}` } });
+          { headers: { 'Authorization': `Bearer ${token}` } });
         if (r.status === 204) { client.say(channel, `🎵 No hay nada reproduciéndose ahora~ 🎵`); return; }
         const trackData = await r.json();
         const track = trackData.item;
@@ -401,14 +443,14 @@ async function handleMessage(client, channel, tags, message, self) {
 
       // !cancion nombre — buscar y agregar
       const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`,
-        { headers: { 'Authorization': `Bearer ${streamer.spotify_token}` } });
+        { headers: { 'Authorization': `Bearer ${token}` } });
       const searchData = await searchRes.json();
       const track = searchData.tracks?.items?.[0];
       if (!track) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${streamer.spotify_token}` }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       if (queueRes.status === 204 || queueRes.status === 200) {
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name} a la cola! 🎶`);
@@ -425,10 +467,7 @@ async function handleMessage(client, channel, tags, message, self) {
   if (firstWord === '!skip') {
     if (!isMod(tags, channelName)) return;
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const token = data?.[0]?.spotify_token;
+      const token = await getSpotifyToken(channelName);
       if (!token) return;
       await fetch('https://api.spotify.com/v1/me/player/next', {
         method: 'POST',
