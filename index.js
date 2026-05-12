@@ -272,13 +272,6 @@ function createMainClient(channels) {
 // ══════════════════════════════════════════
 //  HANDLER DE MENSAJES
 // ══════════════════════════════════════════
-const welcomePhrases = [
-  (u) => `¡${u} llegó al canal! 🕷️ ¡Bienvenido/a, dearie! ♥`,
-  (u) => `¡Una nueva alma! ¡Bienvenid@ ${u}! 🕷️♥`,
-  (u) => `¡${u} entró al chat! 🕷️ ¡Aquí nadie se va sin disfrutar, dearie! ♥`,
-  (u) => `¡${u}, un nuevo súbdito! 👑 ¡Tengo té para ti! 🕷️♥`,
-];
-
 function isMod(tags, channelName) {
   return tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channelName.toLowerCase();
 }
@@ -331,8 +324,14 @@ async function handleMessage(client, channel, tags, message, self) {
   if (!greetedMap[channelName]) greetedMap[channelName] = new Set();
   if (!greetedMap[channelName].has(username.toLowerCase())) {
     greetedMap[channelName].add(username.toLowerCase());
-    const phrase = welcomePhrases[Math.floor(Math.random() * welcomePhrases.length)];
-    setTimeout(() => client.say(channel, phrase(username)), 2000);
+    setTimeout(async () => {
+      try {
+        const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
+        client.say(channel, welcomeMsg);
+      } catch(e) {
+        client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
+      }
+    }, 2000);
   }
 
   // ── Si está en silencio ──
@@ -756,7 +755,8 @@ async function handleMessage(client, channel, tags, message, self) {
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ raffle_active: { active: false, prize: raffle.prize, winner, participants: [] } })
         });
-        client.say(channel, `🏆 ¡El ganador del sorteo es @${winner}! 🎉 Premio: ${raffle.prize} ¡Felicidades, dearie! 🕷️♥`);
+        const winnerMsg = await getMuffetResponse(channelName, `¡Anuncia emocionado que @${winner} ganó el sorteo! El premio es: ${raffle.prize}. Sé entusiasta y usa tu personalidad.`, winner);
+        client.say(channel, winnerMsg);
       } catch(e) { client.say(channel, '⚠️ Error al terminar el sorteo'); }
       return;
     }
