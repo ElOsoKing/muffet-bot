@@ -360,6 +360,82 @@ async function handleMessage(client, channel, tags, message, self) {
     }
   }
 
+  // ── Spotify ──
+  if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const streamer = data?.[0];
+      const spotifyConfig = streamer?.spotify_config || {};
+
+      if (!spotifyConfig.enabled) return;
+      if (!streamer?.spotify_token) { client.say(channel, `@${username} Spotify no está conectado~ 🎵`); return; }
+
+      // Verificar permisos
+      const allowed = spotifyConfig.allowed || ['everyone'];
+      if (!allowed.includes('everyone')) {
+        const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+        const isVIP = !!tags.badges?.vip;
+        const isModUser = isMod(tags, channelName);
+        const canUse = (allowed.includes('sub') && isSub) || (allowed.includes('vip') && isVIP) || (allowed.includes('mod') && isModUser) || isModUser;
+        if (!canUse) {
+          const reqLabels = { sub:'suscriptores', vip:'VIPs', mod:'moderadores' };
+          client.say(channel, `@${username} Solo ${allowed.map(p=>reqLabels[p]||p).join(' y ')} pueden pedir canciones~ 🎵`);
+          return;
+        }
+      }
+
+      const query = message.trim().slice(firstWord.length).trim();
+
+      // !cancion actual — ver qué suena
+      if (!query || query === 'actual' || query === 'now') {
+        const r = await fetch('https://api.spotify.com/v1/me/player/currently-playing',
+          { headers: { 'Authorization': `Bearer ${streamer.spotify_token}` } });
+        if (r.status === 204) { client.say(channel, `🎵 No hay nada reproduciéndose ahora~ 🎵`); return; }
+        const trackData = await r.json();
+        const track = trackData.item;
+        if (track) client.say(channel, `🎵 Sonando: ${track.name} — ${track.artists[0].name} 🎵`);
+        return;
+      }
+
+      // !cancion nombre — buscar y agregar
+      const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`,
+        { headers: { 'Authorization': `Bearer ${streamer.spotify_token}` } });
+      const searchData = await searchRes.json();
+      const track = searchData.tracks?.items?.[0];
+      if (!track) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
+
+      const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${streamer.spotify_token}` }
+      });
+      if (queueRes.status === 204) {
+        client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name} a la cola! 🎶`);
+      } else {
+        client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
+      }
+    } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
+    return;
+  }
+
+  if (firstWord === '!skip') {
+    if (!isMod(tags, channelName)) return;
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const token = data?.[0]?.spotify_token;
+      if (!token) return;
+      await fetch('https://api.spotify.com/v1/me/player/next', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      client.say(channel, `⏭️ Canción saltada~ 🎵`);
+    } catch(e) {}
+    return;
+  }
+
   // ── !titulo — cambiar título del stream ──
   if (firstWord === '!titulo' || firstWord === '!title') {
     if (!isMod(tags, channelName)) return;
