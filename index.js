@@ -410,9 +410,12 @@ async function handleMessage(client, channel, tags, message, self) {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${streamer.spotify_token}` }
       });
-      if (queueRes.status === 204) {
+      if (queueRes.status === 204 || queueRes.status === 200) {
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name} a la cola! 🎶`);
       } else {
+        console.log(`Spotify queue status: ${queueRes.status}`);
+        const errData = await queueRes.text();
+        console.log(`Spotify queue error: ${errData}`);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
