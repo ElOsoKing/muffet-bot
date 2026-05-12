@@ -1001,8 +1001,11 @@ let customClients = {}; // { 'canal': tmiClient }
 async function setupCustomBots() {
   for (const [ch, config] of Object.entries(channelConfigs)) {
     if (config.plan === 'pro' && config.custom_bot_username && config.custom_bot_token) {
-      // Si ya tiene cliente y es el mismo bot, skip
-      if (customClients[ch]) continue;
+      if (customClients[ch]) {
+        // Ya conectado — asegurarse que mainClient salió
+        try { await mainClient.part(`#${ch}`); } catch(e) {}
+        continue;
+      }
       try {
         const client = new tmi.Client({
           options: { debug: false },
@@ -1014,7 +1017,9 @@ async function setupCustomBots() {
         customClients[ch] = client;
         console.log(`🤖 Bot personalizado conectado: ${config.custom_bot_username} → #${ch}`);
         // Salir del canal principal para no duplicar mensajes
-        try { await mainClient.part(`#${ch}`); } catch(e) {}
+        setTimeout(async () => {
+          try { await mainClient.part(`#${ch}`); console.log(`👋 muffet_osoking salió de #${ch}`); } catch(e) {}
+        }, 2000);
       } catch (err) {
         console.error(`Error conectando bot personalizado para ${ch}:`, err.message);
       }
