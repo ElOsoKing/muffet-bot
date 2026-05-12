@@ -810,13 +810,27 @@ async function handleMessage(client, channel, tags, message, self) {
         }
       }
 
-      participants.push(username);
+      // Agregar entradas según multiplicador
+      const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+      const isVIP = !!tags.badges?.vip;
+      const isModUser = isMod(tags, channelName);
+      const settings = raffleConfig?.raffle_settings || {};
+      let entries = settings.entries_everyone || 1;
+      if (isSub) entries = settings.entries_sub || 2;
+      if (isVIP) entries = Math.max(entries, settings.entries_vip || 2);
+      if (isModUser) entries = Math.max(entries, settings.entries_mod || 1);
+
+      // Agregar múltiples entradas
+      for (let i = 0; i < entries; i++) participants.push(username);
+
       await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
         method: 'PATCH',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ raffle_active: { ...raffle, participants } })
       });
-      client.say(channel, `✅ @${username} ¡Entraste al sorteo! Somos ${participants.length} participantes 🎉🕷️`);
+      const uniqueCount = [...new Set(participants)].length;
+      const entryMsg = entries > 1 ? ` (x${entries} entradas)` : '';
+      client.say(channel, `✅ @${username} ¡Entraste al sorteo!${entryMsg} Somos ${uniqueCount} participantes 🎉🕷️`);
     } catch(e) {}
     return;
   }
