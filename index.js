@@ -1,14 +1,17 @@
-const tmi = require('tmi.js');
+const tmi  = require('tmi.js');
 const Groq = require('groq-sdk');
+const http = require('http');
 
 // ══════════════════════════════════════════
 //  CONFIGURACIÓN GLOBAL
 // ══════════════════════════════════════════
-const TWITCH_BOT_USERNAME = process.env.TWITCH_BOT_USERNAME; // muffet_osoking
-const TWITCH_OAUTH_TOKEN  = process.env.TWITCH_OAUTH_TOKEN;  // token de muffet_osoking
+const TWITCH_BOT_USERNAME = process.env.TWITCH_BOT_USERNAME;
+const TWITCH_OAUTH_TOKEN  = process.env.TWITCH_OAUTH_TOKEN;
 const GROQ_API_KEY        = process.env.GROQ_API_KEY;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
+const BOT_SECRET          = process.env.BOT_SECRET || 'muffetbot-internal-2026';
+const BOT_PORT            = process.env.BOT_PORT || 3001;
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
@@ -1297,5 +1300,59 @@ async function start() {
     }
   }, 2 * 60 * 1000);
 }
+
+// ── Handler de eventos de Twitch (follows, subs, bits) ──
+async function handleTwitchEvent(type, event) {
+  const channelName = event.broadcaster_user_login?.toLowerCase();
+  if (!channelName || !channelConfigs[channelName]) return;
+
+  const client = customClients[channelName] || mainClient;
+  if (muffetActiveMap[channelName] === false) return;
+
+  try {
+    let prompt = '';
+    if (type === 'channel.follow') {
+      const user = event.user_name;
+      prompt = `@${user} acaba de seguir el canal. Agradécele brevemente con tu personalidad.`;
+    } else if (type === 'channel.subscribe') {
+      const user = event.user_name;
+      const tier = event.tier === '3000' ? 'Tier 3' : event.tier === '2000' ? 'Tier 2' : 'Tier 1';
+      prompt = `@${user} se acaba de suscribir al canal (${tier}). Agradécele emocionado con tu personalidad.`;
+    } else if (type === 'channel.subscription.gift') {
+      const user = event.user_name || 'Alguien anónimo';
+      const total = event.total || 1;
+      prompt = `@${user} regaló ${total} suscripcion${total>1?'es':''} al canal. Agradécele efusivamente con tu personalidad.`;
+    } else if (type === 'channel.cheer') {
+      const user = event.user_name;
+      const bits = event.bits;
+      prompt = `@${user} donó ${bits} bits al canal. Agradécele con entusiasmo con tu personalidad.`;
+    }
+
+    if (prompt) {
+      const response = await getMuffetResponse(channelName, prompt, 'sistema');
+      client.say(`#${channelName}`, response);
+    }
+  } catch(e) {}
+}
+
+// Servidor interno para recibir eventos desde el dashboard
+const botServer = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/event') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { secret, type, event } = JSON.parse(body);
+        if (secret !== BOT_SECRET) { res.writeHead(403); res.end(); return; }
+        handleTwitchEvent(type, event);
+        res.writeHead(200); res.end('OK');
+      } catch(e) { res.writeHead(400); res.end(); }
+    });
+  } else { res.writeHead(404); res.end(); }
+});
+
+botServer.listen(BOT_PORT, () => {
+  console.log(`🤖 Bot event server en puerto ${BOT_PORT}`);
+});
 
 start().catch(console.error);
