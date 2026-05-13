@@ -1155,31 +1155,6 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     return;
   }
 
-  // ── Palabras clave ──
-  const keywords = config.keyword_responses || {};
-  if (Object.keys(keywords).length > 0) {
-    for (const [keyword, kConfig] of Object.entries(keywords)) {
-      if (!kConfig.active) continue;
-      const pattern = kConfig.exact
-        ? msgLower === keyword.toLowerCase()
-        : msgLower.includes(keyword.toLowerCase());
-      if (pattern) {
-        const cooldownKey = `${channelName}_kw_${keyword}`;
-        if (commandCooldowns[cooldownKey] && Date.now() - commandCooldowns[cooldownKey] < (kConfig.cooldown || 30) * 1000) continue;
-        commandCooldowns[cooldownKey] = Date.now();
-        console.log(`🎭 Keyword "${keyword}" activada en #${channelName} por ${username}`);
-        if (kConfig.type === 'ai') {
-          const aiResponse = await getMuffetResponse(channelName, `Alguien dijo "${message}" en el chat. ${kConfig.prompt || 'Responde de forma natural.'}`, username);
-          client.say(channel, aiResponse);
-        } else {
-          const response = (kConfig.response || '').replace(/\{user\}/g, username);
-          if (response) client.say(channel, response);
-        }
-        break;
-      }
-    }
-  }
-
   // ── Menciones al bot directamente ──
   const botUsername = (channelConfigs[channelName]?.custom_bot_username || TWITCH_BOT_USERNAME).toLowerCase();
   if (msgLower.includes(`@${botUsername}`) && !msgLower.startsWith('!')) {
