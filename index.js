@@ -403,6 +403,25 @@ async function getSpotifyToken(channelName) {
 }
 
   // ── Spotify ──
+const spotifyQueueCount = {}; // { channelName: { username: count } }
+
+  if (firstWord === '!cola' || firstWord === '!queue') {
+    try {
+      const token = await getSpotifyToken(channelName);
+      if (!token) return;
+      const r = await fetch('https://api.spotify.com/v1/me/player/queue', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!r.ok) { client.say(channel, `@${username} No se pudo obtener la cola~ 🎵`); return; }
+      const data = await r.json();
+      const queue = data.queue?.slice(0, 5) || [];
+      if (!queue.length) { client.say(channel, `🎵 La cola está vacía~ 🎵`); return; }
+      const list = queue.map((t, i) => `${i+1}. ${t.name} — ${t.artists[0].name}`).join(' | ');
+      client.say(channel, `🎵 Cola: ${list} 🎵`);
+    } catch(e) { client.say(channel, `@${username} Error al obtener la cola~ 🎵`); }
+    return;
+  }
+
   if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
@@ -443,6 +462,15 @@ async function getSpotifyToken(channelName) {
         return;
       }
 
+      // Verificar límite por usuario
+      const maxPerUser = spotifyConfig.max_per_user || 3;
+      if (!spotifyQueueCount[channelName]) spotifyQueueCount[channelName] = {};
+      const userCount = spotifyQueueCount[channelName][username.toLowerCase()] || 0;
+      if (userCount >= maxPerUser && !isMod(tags, channelName)) {
+        client.say(channel, `@${username} Ya pediste ${userCount}/${maxPerUser} canciones~ Espera a que suenen 🎵`);
+        return;
+      }
+
       // !cancion nombre — buscar y agregar
       const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`,
         { headers: { 'Authorization': `Bearer ${token}` } });
@@ -455,7 +483,11 @@ async function getSpotifyToken(channelName) {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (queueRes.status === 204 || queueRes.status === 200) {
-        client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name} a la cola! 🎶`);
+        // Actualizar conteo del usuario
+        spotifyQueueCount[channelName][username.toLowerCase()] = userCount + 1;
+        const remaining = maxPerUser - (userCount + 1);
+        const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
+        client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
       } else {
         console.log(`Spotify queue status: ${queueRes.status}`);
         const errData = await queueRes.text();
