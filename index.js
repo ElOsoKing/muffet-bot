@@ -876,6 +876,101 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     return;
   }
 
+  // ── Encuestas ──
+  // Uso: !poll ¿Qué jugamos? Minecraft Fortnite Valorant
+  if (firstWord === '!poll' || firstWord === '!encuesta') {
+    if (!isMod(tags, channelName)) return;
+    const parts = message.trim().slice(firstWord.length).trim().split('?');
+    if (parts.length < 2) { client.say(channel, `@${username} Uso: !poll ¿Pregunta? Opcion1 Opcion2 Opcion3 🕷️`); return; }
+    const question = parts[0].trim().replace(/^¿/, '');
+    const options = parts[1].trim().split(' ').filter(Boolean);
+    if (options.length < 2) { client.say(channel, `@${username} Necesitas al menos 2 opciones~ 🕷️`); return; }
+    if (options.length > 5) { client.say(channel, `@${username} Máximo 5 opciones~ 🕷️`); return; }
+
+    // Guardar encuesta activa
+    if (!channelConfigs[channelName].activePoll) channelConfigs[channelName].activePoll = null;
+    channelConfigs[channelName].activePoll = { question, options, votes: {}, started: Date.now() };
+
+    const optList = options.map((o, i) => `${i+1}. ${o}`).join(' | ');
+    client.say(channel, `📊 ¡Encuesta! ${question} → ${optList} — Vota con el número 🕷️`);
+
+    // Cerrar automáticamente en 2 minutos
+    setTimeout(async () => {
+      const poll = channelConfigs[channelName].activePoll;
+      if (!poll || poll.started !== channelConfigs[channelName].activePoll?.started) return;
+      const results = poll.options.map((o, i) => {
+        const count = Object.values(poll.votes).filter(v => v === i+1).length;
+        return `${o}: ${count}`;
+      }).join(' | ');
+      const winner = poll.options.reduce((best, o, i) => {
+        const count = Object.values(poll.votes).filter(v => v === i+1).length;
+        return count > best.count ? { name: o, count } : best;
+      }, { name: '', count: -1 });
+      client.say(channel, `📊 Encuesta cerrada! ${results} ${winner.count > 0 ? `— Ganó: ${winner.name} 🏆` : ''} 🕷️`);
+      channelConfigs[channelName].activePoll = null;
+    }, 2 * 60 * 1000);
+    return;
+  }
+
+  // Votar en encuesta activa
+  if (/^[1-5]$/.test(firstWord) && channelConfigs[channelName]?.activePoll) {
+    const poll = channelConfigs[channelName].activePoll;
+    const vote = parseInt(firstWord);
+    if (vote <= poll.options.length) {
+      poll.votes[username.toLowerCase()] = vote;
+    }
+    return;
+  }
+
+  // Cerrar encuesta manualmente
+  if (firstWord === '!endpoll' || firstWord === '!cerrarencuesta') {
+    if (!isMod(tags, channelName)) return;
+    const poll = channelConfigs[channelName]?.activePoll;
+    if (!poll) { client.say(channel, `@${username} No hay encuesta activa~ 🕷️`); return; }
+    const results = poll.options.map((o, i) => {
+      const count = Object.values(poll.votes).filter(v => v === i+1).length;
+      return `${o}: ${count}`;
+    }).join(' | ');
+    const winner = poll.options.reduce((best, o, i) => {
+      const count = Object.values(poll.votes).filter(v => v === i+1).length;
+      return count > best.count ? { name: o, count } : best;
+    }, { name: '', count: -1 });
+    client.say(channel, `📊 Resultados: ${results} ${winner.count > 0 ? `— Ganó: ${winner.name} 🏆` : ''} 🕷️`);
+    channelConfigs[channelName].activePoll = null;
+    return;
+  }
+
+  // ── Dados RPG ──
+  // !d6, !d20, !2d6, !dado, etc.
+  const diceMatch = firstWord.match(/^!(\d*)d(\d+)$/i);
+  if (diceMatch || firstWord === '!dado') {
+    const num = diceMatch ? (parseInt(diceMatch[1]) || 1) : 1;
+    const sides = diceMatch ? parseInt(diceMatch[2]) : 6;
+    if (num > 10 || sides > 1000) { client.say(channel, `@${username} ¡Ese dado es demasiado grande, dearie! 🕷️`); return; }
+    const rolls = Array.from({length: num}, () => Math.floor(Math.random() * sides) + 1);
+    const total = rolls.reduce((a, b) => a + b, 0);
+    const rollStr = num > 1 ? `[${rolls.join(', ')}] = ${total}` : `${total}`;
+    client.say(channel, `🎲 @${username} tiró ${num}d${sides}: ${rollStr} 🕷️`);
+    return;
+  }
+
+  // ── Acciones sociales ──
+  const socialActions = {
+    '!hug':    (u, t) => `🤗 @${u} le da un abrazo a @${t}! ♥`,
+    '!pat':    (u, t) => `👋 @${u} le da palmaditas en la cabeza a @${t}! ☺️`,
+    '!wave':   (u, t) => `👋 @${u} le saluda a @${t}!`,
+    '!poke':   (u, t) => `👉 @${u} le da un toque a @${t}!`,
+    '!kiss':   (u, t) => `💋 @${u} le manda un beso a @${t}! ♥`,
+    '!slap':   (u, t) => `👋 @${u} le da una bofetada a @${t}! 💥`,
+    '!bite':   (u, t) => `😈 @${u} le muerde a @${t}! 🕷️`,
+    '!highfive':(u, t) => `🙌 @${u} le choca los cinco a @${t}!`,
+  };
+  if (socialActions[firstWord]) {
+    const target = message.trim().split(' ')[1]?.replace('@','') || username;
+    client.say(channel, socialActions[firstWord](username, target));
+    return;
+  }
+
   // ── Sorteo ──
   if (firstWord === '!sorteo') {
     const subCmd = msgLower.split(' ')[1];
