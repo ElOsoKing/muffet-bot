@@ -63,7 +63,6 @@ async function loadAllChannels() {
         counters:           s.counters           || {},
         points_config:      s.points_config      || {},
         viewer_points:      s.viewer_points      || {},
-        keyword_responses:  s.keyword_responses  || {},
         social_links:       s.social_links       || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
@@ -73,11 +72,6 @@ async function loadAllChannels() {
     });
 
     console.log(`🐻🕷️ Config cargada para ${streamers.length} canales:`, streamers.map(s => s.twitch_username).join(', '));
-    // Debug auto_messages
-    streamers.forEach(s => {
-      const ch = s.twitch_username.toLowerCase();
-      console.log(`📨 ${ch} auto_messages:`, JSON.stringify(s.auto_messages)?.substring(0,100));
-    });
     return streamers.map(s => s.twitch_username.toLowerCase());
   } catch (err) {
     console.error('Error cargando canales:', err.message);
@@ -124,9 +118,8 @@ async function flushStats() {
         body: JSON.stringify({ command_stats: updated })
       });
     }
-    console.log('📊 Stats actualizadas');
   } catch (err) {
-    console.error('Error guardando stats:', err.message);
+    
   }
 }
 
@@ -513,9 +506,6 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
       } else {
-        console.log(`Spotify queue status: ${queueRes.status}`);
-        const errData = await queueRes.text();
-        console.log(`Spotify queue error: ${errData}`);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
@@ -1259,7 +1249,6 @@ async function start() {
         const type     = typeof msg === 'object' ? msg.type     : 'fixed';
         const interval = typeof msg === 'object' ? msg.interval : (config.auto_message_interval || 20);
         const intervalMs = Math.max(interval, 5) * 60 * 1000;
-        console.log(`⏰ Timer: #${ch} → "${text.substring(0,30)}..." cada ${Math.max(interval,5)} min`);
 
         const timer = setInterval(async () => {
           if (muffetActiveMap[ch] === false) return;
@@ -1277,10 +1266,8 @@ async function start() {
                 temperature: 0.9,
               });
               const aiText = aiMsg.choices[0]?.message?.content || text;
-              console.log(`📨 Auto msg IA → #${ch}: ${aiText.substring(0,50)}`);
               client.say(`#${ch}`, aiText).catch(e => console.error(`❌ Error say #${ch}:`, e.message));
             } else {
-              console.log(`📨 Auto msg → #${ch}: ${text.substring(0,50)}`);
               client.say(`#${ch}`, text).catch(e => console.error(`❌ Error say #${ch}:`, e.message));
             }
           } catch(e) {
