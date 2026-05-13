@@ -1157,25 +1157,26 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── Palabras clave ──
   const keywords = config.keyword_responses || {};
-  for (const [keyword, kConfig] of Object.entries(keywords)) {
-    if (!kConfig.active) continue;
-    const pattern = kConfig.exact
-      ? msgLower === keyword.toLowerCase()
-      : msgLower.includes(keyword.toLowerCase());
-    if (pattern) {
-      // Cooldown por keyword (30s por defecto)
-      const cooldownKey = `${channelName}_kw_${keyword}`;
-      if (commandCooldowns[cooldownKey] && Date.now() - commandCooldowns[cooldownKey] < (kConfig.cooldown || 30) * 1000) continue;
-      commandCooldowns[cooldownKey] = Date.now();
-
-      if (kConfig.type === 'ai') {
-        const aiResponse = await getMuffetResponse(channelName, `Alguien dijo "${message}" en el chat. ${kConfig.prompt || 'Responde de forma natural.'}`, username);
-        client.say(channel, aiResponse);
-      } else {
-        const response = (kConfig.response || '').replace(/\{user\}/g, username);
-        if (response) client.say(channel, response);
+  if (Object.keys(keywords).length > 0) {
+    for (const [keyword, kConfig] of Object.entries(keywords)) {
+      if (!kConfig.active) continue;
+      const pattern = kConfig.exact
+        ? msgLower === keyword.toLowerCase()
+        : msgLower.includes(keyword.toLowerCase());
+      if (pattern) {
+        const cooldownKey = `${channelName}_kw_${keyword}`;
+        if (commandCooldowns[cooldownKey] && Date.now() - commandCooldowns[cooldownKey] < (kConfig.cooldown || 30) * 1000) continue;
+        commandCooldowns[cooldownKey] = Date.now();
+        console.log(`🎭 Keyword "${keyword}" activada en #${channelName} por ${username}`);
+        if (kConfig.type === 'ai') {
+          const aiResponse = await getMuffetResponse(channelName, `Alguien dijo "${message}" en el chat. ${kConfig.prompt || 'Responde de forma natural.'}`, username);
+          client.say(channel, aiResponse);
+        } else {
+          const response = (kConfig.response || '').replace(/\{user\}/g, username);
+          if (response) client.say(channel, response);
+        }
+        break;
       }
-      break; // Solo una keyword por mensaje
     }
   }
 
