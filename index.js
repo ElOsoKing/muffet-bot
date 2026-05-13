@@ -60,10 +60,11 @@ async function loadAllChannels() {
         on_off_ai:     s.on_off_ai     !== false,
         on_message:    s.on_message    || null,
         off_message:   s.off_message   || null,
-        counters:      s.counters      || {},
-        points_config: s.points_config || {},
-        viewer_points: s.viewer_points || {},
-        social_links:  s.social_links  || {},
+        counters:           s.counters           || {},
+        points_config:      s.points_config      || {},
+        viewer_points:      s.viewer_points      || {},
+        keyword_responses:  s.keyword_responses  || {},
+        social_links:       s.social_links       || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -236,19 +237,42 @@ async function resolveVariables(text, channelName, username, touser) {
   }
   return result;
 }
+// ── Historial de conversación por canal ──
+const chatHistory = {}; // { channelName: [{role, content}] }
+const MAX_HISTORY = 10;
+
+function addToHistory(channelName, role, content) {
+  if (!chatHistory[channelName]) chatHistory[channelName] = [];
+  chatHistory[channelName].push({ role, content });
+  if (chatHistory[channelName].length > MAX_HISTORY) {
+    chatHistory[channelName].shift();
+  }
+}
+
 async function getMuffetResponse(channel, userMessage, username) {
   try {
     const config = channelConfigs[channel] || defaultConfig(channel);
+    const history = chatHistory[channel] || [];
+
+    // Agregar mensaje del usuario al historial
+    addToHistory(channel, 'user', `${username}: ${userMessage}`);
+
     const completion = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
       messages: [
         { role: 'system', content: config.bot_prompt },
-        { role: 'user', content: `El usuario "${username}" dice: ${userMessage}` }
+        ...history.map(h => ({ role: h.role, content: h.content })),
       ],
       max_tokens: 150,
       temperature: 0.85,
     });
-    return completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🕷️';
+
+    const response = completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🕷️';
+
+    // Agregar respuesta al historial
+    addToHistory(channel, 'assistant', response);
+
+    return response;
   } catch (err) {
     console.error('Error Groq:', err.message);
     return '¡Las telarañas se enredaron, dearie! 🕷️';
@@ -1129,6 +1153,30 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     const resolved = await resolveVariables(response, channelName, username, touser);
     client.say(channel, resolved);
     return;
+  }
+
+  // ── Palabras clave ──
+  const keywords = config.keyword_responses || {};
+  for (const [keyword, kConfig] of Object.entries(keywords)) {
+    if (!kConfig.active) continue;
+    const pattern = kConfig.exact
+      ? msgLower === keyword.toLowerCase()
+      : msgLower.includes(keyword.toLowerCase());
+    if (pattern) {
+      // Cooldown por keyword (30s por defecto)
+      const cooldownKey = `${channelName}_kw_${keyword}`;
+      if (commandCooldowns[cooldownKey] && Date.now() - commandCooldowns[cooldownKey] < (kConfig.cooldown || 30) * 1000) continue;
+      commandCooldowns[cooldownKey] = Date.now();
+
+      if (kConfig.type === 'ai') {
+        const aiResponse = await getMuffetResponse(channelName, `Alguien dijo "${message}" en el chat. ${kConfig.prompt || 'Responde de forma natural.'}`, username);
+        client.say(channel, aiResponse);
+      } else {
+        const response = (kConfig.response || '').replace(/\{user\}/g, username);
+        if (response) client.say(channel, response);
+      }
+      break; // Solo una keyword por mensaje
+    }
   }
 
   // ── Menciones al bot directamente ──
