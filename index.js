@@ -1164,17 +1164,54 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 function setupEvents(client) {
   client.on('message', (channel, tags, message, self) => handleMessage(client, channel, tags, message, self));
 
-  client.on('raided', (channel, username, viewers) => {
-    client.say(channel, `¡¡RAID!! 🕷️👑 ¡${username} trae ${viewers} almas nuevas! ¡BIENVENIDOS, DEARIES! ♥♥♥`);
+  client.on('raided', async (channel, username, viewers) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username);
+    client.say(channel, msg);
   });
-  client.on('subscription', (channel, username) => {
-    client.say(channel, `¡¡${username} se suscribió!! 🕷️ ¡Gracias dearie! 👑♥`);
+
+  client.on('subscription', async (channel, username, methods) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    const tier = methods?.plan === '3000' ? 'Tier 3' : methods?.plan === '2000' ? 'Tier 2' : 'Tier 1';
+    const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username);
+    client.say(channel, msg);
   });
-  client.on('resub', (channel, username, months) => {
-    client.say(channel, `¡¡${username} lleva ${months} meses!! 🕷️ ¡Eres de los más leales, dearie! 👑♥`);
+
+  client.on('resub', async (channel, username, months) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username);
+    client.say(channel, msg);
   });
-  client.on('subgift', (channel, username, recipient) => {
-    client.say(channel, `¡¡${username} le regaló sub a ${recipient}!! 🕷️ ¡Qué generoso/a! 👑♥`);
+
+  // Sub gift individual
+  client.on('subgift', async (channel, username, recipient, methods) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    // Evitar spam cuando son gift masivos — solo responder si no viene de submysterygift
+    if (username === 'ananonymousgifter') return;
+    const msg = await getMuffetResponse(ch, `@${username} le regaló una suscripción a @${recipient}. Agradécele lo generoso que es.`, username);
+    client.say(channel, msg);
+  });
+
+  // Gift masivo (cuando regalan 5, 10, 20 subs a la vez)
+  client.on('submysterygift', async (channel, username, numbOfSubs) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripciones al canal. ¡Es muy generoso! Agradécele efusivamente.`, username);
+    client.say(channel, msg);
+  });
+
+  // Bits
+  client.on('cheer', async (channel, tags, message) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    const username = tags.username;
+    const bits = tags.bits;
+    const msg = await getMuffetResponse(ch, `@${username} acaba de donar ${bits} bits al canal. Agradécele con entusiasmo.`, username);
+    client.say(channel, msg);
   });
 }
 
