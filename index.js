@@ -655,6 +655,89 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     return;
   }
 
+  // ── !apostar ──
+  if (firstWord === '!apostar' || firstWord === '!bet') {
+    const pointsConfig = config.points_config || {};
+    if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
+    const amount = parseInt(message.trim().split(' ')[1]);
+    const maxBet = pointsConfig.max_bet || 500;
+    const emoji = pointsConfig.emoji || '🏆';
+    const name = pointsConfig.name || 'puntos';
+    if (!amount || amount < 1) { client.say(channel, `@${username} Uso: !apostar 100 🕷️`); return; }
+    if (amount > maxBet) { client.say(channel, `@${username} Máximo ${maxBet} ${name} por apuesta~ 🕷️`); return; }
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const userLower = username.toLowerCase();
+    const current = viewerPoints[userLower] || 0;
+    if (current < amount) { client.say(channel, `@${username} No tienes suficientes ${name}! Tienes ${current} ${emoji} 🕷️`); return; }
+    // 50/50
+    const won = Math.random() < 0.5;
+    const newTotal = won ? current + amount : current - amount;
+    viewerPoints[userLower] = Math.max(0, newTotal);
+    channelConfigs[channelName].viewer_points = viewerPoints;
+    if (won) {
+      client.say(channel, `🎰 ¡@${username} ganó la apuesta! +${amount} ${emoji} → Total: ${newTotal} ${name} 🎉🕷️`);
+    } else {
+      client.say(channel, `🎰 @${username} perdió la apuesta... -${amount} ${emoji} → Total: ${newTotal} ${name} 😢🕷️`);
+    }
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ viewer_points: viewerPoints })
+    }).catch(() => {});
+    return;
+  }
+
+  // ── !canjear ──
+  if (firstWord === '!canjear' || firstWord === '!redeem') {
+    const pointsConfig = config.points_config || {};
+    if (!pointsConfig.enabled) return;
+    const rewards = pointsConfig.rewards || [];
+    const emoji = pointsConfig.emoji || '🏆';
+    const name = pointsConfig.name || 'puntos';
+    const query = message.trim().slice(firstWord.length).trim().toLowerCase();
+
+    // !canjear sin argumento → mostrar lista
+    if (!query) {
+      if (!rewards.length) { client.say(channel, `@${username} No hay premios configurados aún~ 🕷️`); return; }
+      const list = rewards.map(r => `${r.name} (${r.cost} ${emoji})`).join(' | ');
+      client.say(channel, `🎁 Premios: ${list} — Usa !canjear [nombre] 🕷️`);
+      return;
+    }
+
+    // Buscar el premio
+    const reward = rewards.find(r => r.name.toLowerCase() === query || r.name.toLowerCase().includes(query));
+    if (!reward) { client.say(channel, `@${username} Premio no encontrado. Escribe !canjear para ver la lista~ 🕷️`); return; }
+
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const userLower = username.toLowerCase();
+    const current = viewerPoints[userLower] || 0;
+    if (current < reward.cost) {
+      client.say(channel, `@${username} Necesitas ${reward.cost} ${emoji} para canjear "${reward.name}". Tienes ${current} ${emoji} 🕷️`);
+      return;
+    }
+
+    // Descontar puntos y guardar solicitud
+    viewerPoints[userLower] = current - reward.cost;
+    channelConfigs[channelName].viewer_points = viewerPoints;
+
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const requests = data?.[0]?.redeem_requests || [];
+      requests.push({ id: Date.now(), username, reward: reward.name, cost: reward.cost, status: 'pending', date: new Date().toISOString() });
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ viewer_points: viewerPoints, redeem_requests: requests })
+      });
+      client.say(channel, `✅ @${username} canjeó "${reward.name}" por ${reward.cost} ${emoji}! El streamer revisará tu solicitud~ 🕷️`);
+    } catch(e) {
+      client.say(channel, `@${username} Error al procesar el canje~ 🕷️`);
+    }
+    return;
+  }
+
   // ── Sistema de puntos y niveles ──
   const pointsConfig = config.points_config || {};
   const pointsEnabled = pointsConfig.enabled !== false;
