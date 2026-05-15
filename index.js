@@ -1190,9 +1190,8 @@ function setupEvents(client) {
   client.on('subgift', async (channel, username, recipient, methods) => {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
-    // Evitar spam cuando son gift masivos — solo responder si no viene de submysterygift
     if (username === 'ananonymousgifter') return;
-    const msg = await getMuffetResponse(ch, `@${username} le regaló una suscripción a @${recipient}. Agradécele lo generoso que es.`, username);
+    const msg = await getMuffetResponse(ch, `@${username} le acaba de regalar una suscripción a @${recipient}. Menciona los dos nombres y agradécele lo generoso que es.`, username);
     client.say(channel, msg);
   });
 
@@ -1200,7 +1199,7 @@ function setupEvents(client) {
   client.on('submysterygift', async (channel, username, numbOfSubs) => {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
-    const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripciones al canal. ¡Es muy generoso! Agradécele efusivamente.`, username);
+    const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
     client.say(channel, msg);
   });
 
