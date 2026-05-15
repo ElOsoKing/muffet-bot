@@ -288,6 +288,25 @@ function botSay(client, channel, message, isConversation = false) {
   registerBotMsg(ch);
   return true;
 }
+// ── Bots conocidos a ignorar ──
+const KNOWN_BOTS = new Set([
+  'streamelements','nightbot','fossabot','moobot','streamlabs','wizebot',
+  'botisimo','coebot','deepbot','phantombot','stay_hydrated_bot','sery_bot',
+  'electricallongboard','commanderroot','anotherttvviewer','logviewer',
+  'streamholics','kofistreambot','lurxx','twitchprimereminder','streamlootsbot',
+]);
+
+function isKnownBot(tags, username) {
+  const user = username.toLowerCase();
+  if (KNOWN_BOTS.has(user)) return true;
+  // Bots del ecosistema MuffetBot
+  if (Object.values(channelConfigs).some(c => c.custom_bot_username?.toLowerCase() === user)) return true;
+  // Bot principal de MuffetBot
+  if (user === TWITCH_BOT_USERNAME?.toLowerCase()) return true;
+  return false;
+}
+
+// ── Historial de conversación por canal ──
 const chatHistory = {}; // { channelName: [{role, content}] }
 const MAX_HISTORY = 10;
 
@@ -352,6 +371,7 @@ function isMod(tags, channelName) {
 
 async function handleMessage(client, channel, tags, message, self) {
   if (self) return;
+  if (isKnownBot(tags, tags.username || '')) return;
 
   const channelName = channel.replace('#', '').toLowerCase();
   const config = channelConfigs[channelName] || defaultConfig(channelName);
