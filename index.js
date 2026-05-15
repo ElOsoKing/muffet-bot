@@ -1283,6 +1283,23 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     return;
   }
 
+  // ── !chiste ──
+  if (firstWord === '!chiste' || firstWord === '!joke') {
+    if (hasUserCooldown(channelName, `chiste_${username}`) && !isMod(tags, channelName)) {
+      const secs = getCooldownRemaining(channelName, `chiste_${username}`);
+      client.say(channel, `@${username} Espera ${secs}s antes de pedir otro chiste~ 🕷️`);
+      return;
+    }
+    setUserCooldown(channelName, `chiste_${username}`);
+    const tema = message.trim().slice(firstWord.length).trim();
+    const prompt = tema
+      ? `Cuenta un chiste corto y gracioso sobre "${tema}" con tu personalidad. Máximo 2 oraciones.`
+      : `Cuenta un chiste corto y gracioso con tu personalidad. Máximo 2 oraciones.`;
+    const response = await getMuffetResponse(channelName, prompt, username);
+    botSay(client, channel, response);
+    return;
+  }
+
   if (firstWord === '!ask' || firstWord === '!pregunta') {
     if (!config.ai_enabled) { client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️`); return; }
     const question = message.trim().slice(firstWord.length).trim();
