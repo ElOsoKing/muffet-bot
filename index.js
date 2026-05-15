@@ -1379,9 +1379,13 @@ async function start() {
 
   function scheduleAutoMessages() {
     for (const [ch, config] of Object.entries(channelConfigs)) {
-      if (!config.auto_messages?.length) continue;
-      if (autoMsgIntervals[ch]?.length) continue;
+      // Limpiar timers existentes — así si borraron mensajes se detienen
+      if (autoMsgIntervals[ch]?.length) {
+        autoMsgIntervals[ch].forEach(t => clearInterval(t));
+      }
       autoMsgIntervals[ch] = [];
+
+      if (!config.auto_messages?.length) continue;
 
       config.auto_messages.forEach(msg => {
         const text     = typeof msg === 'object' ? msg.text     : msg;
@@ -1391,10 +1395,8 @@ async function start() {
 
         const timer = setInterval(async () => {
           if (muffetActiveMap[ch] === false) return;
-          // No enviar si el chat lleva más de 10 min inactivo
           const lastActivity = lastChatActivity[ch];
           if (!lastActivity || Date.now() - lastActivity > 10 * 60 * 1000) return;
-          // Agregar a la cola
           if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
           autoMsgQueue[ch].items.push({ text, type, channelName: ch });
           processAutoMsgQueue(ch);
