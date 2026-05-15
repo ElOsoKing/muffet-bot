@@ -233,7 +233,61 @@ async function resolveVariables(text, channelName, username, touser) {
   }
   return result;
 }
-// ── Historial de conversación por canal ──
+// ── Sistema de cooldowns y anti-spam ──
+const userCooldowns    = {}; // { 'channel_user': timestamp } — cooldown por usuario en comandos
+const botMsgCount      = {}; // { channelName: [timestamps] } — mensajes por minuto
+const GLOBAL_COOLDOWN  = 3000;  // 3s entre respuestas automáticas
+const CMD_COOLDOWN     = 30000; // 30s por usuario en comandos IA
+const MAX_PER_MINUTE   = 8;     // máximo mensajes del bot por minuto
+let lastBotMsg         = {};    // { channelName: timestamp } — último mensaje global
+
+function canBotSpeak(channelName, isConversation = false) {
+  const now = Date.now();
+  // Limpiar mensajes viejos
+  if (!botMsgCount[channelName]) botMsgCount[channelName] = [];
+  botMsgCount[channelName] = botMsgCount[channelName].filter(t => now - t < 60000);
+
+  // Conversaciones directas — solo verificar límite por minuto
+  if (isConversation) {
+    return botMsgCount[channelName].length < MAX_PER_MINUTE;
+  }
+
+  // Cooldown global entre respuestas automáticas
+  if (lastBotMsg[channelName] && now - lastBotMsg[channelName] < GLOBAL_COOLDOWN) return false;
+  // Límite por minuto
+  return botMsgCount[channelName].length < MAX_PER_MINUTE;
+}
+
+function registerBotMsg(channelName) {
+  const now = Date.now();
+  if (!botMsgCount[channelName]) botMsgCount[channelName] = [];
+  botMsgCount[channelName].push(now);
+  lastBotMsg[channelName] = now;
+}
+
+function hasUserCooldown(channelName, username) {
+  const key = `${channelName}_${username}`;
+  return userCooldowns[key] && Date.now() - userCooldowns[key] < CMD_COOLDOWN;
+}
+
+function setUserCooldown(channelName, username) {
+  userCooldowns[`${channelName}_${username}`] = Date.now();
+}
+
+function getCooldownRemaining(channelName, username) {
+  const key = `${channelName}_${username}`;
+  if (!userCooldowns[key]) return 0;
+  return Math.ceil((CMD_COOLDOWN - (Date.now() - userCooldowns[key])) / 1000);
+}
+
+// Wrapper para client.say con registro
+function botSay(client, channel, message, isConversation = false) {
+  const ch = channel.replace('#','');
+  if (!canBotSpeak(ch, isConversation)) return false;
+  client.say(channel, message).catch(() => {});
+  registerBotMsg(ch);
+  return true;
+}
 const chatHistory = {}; // { channelName: [{role, content}] }
 const MAX_HISTORY = 10;
 
@@ -347,7 +401,7 @@ async function handleMessage(client, channel, tags, message, self) {
     setTimeout(async () => {
       try {
         const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
-        client.say(channel, welcomeMsg);
+        botSay(client, channel, welcomeMsg, true);
       } catch(e) {
         client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
       }
@@ -1118,7 +1172,15 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     if (!config.ai_enabled) { client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️`); return; }
     const question = message.trim().slice(firstWord.length).trim();
     if (!question) { client.say(channel, `¡${username}, dearie! Escribe: !ask ¿tu pregunta? 🕷️`); return; }
-    client.say(channel, `@${username} ${await getMuffetResponse(channelName, question, username)}`);
+    // Cooldown por usuario — 30 segundos
+    if (hasUserCooldown(channelName, username) && !isMod(tags, channelName)) {
+      const secs = getCooldownRemaining(channelName, username);
+      client.say(channel, `@${username} Espera ${secs}s antes de volver a preguntar~ 🕷️`);
+      return;
+    }
+    setUserCooldown(channelName, username);
+    const response = await getMuffetResponse(channelName, question, username);
+    botSay(client, channel, `@${username} ${response}`);
     return;
   }
 
@@ -1148,12 +1210,13 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     return;
   }
 
-  // ── Menciones al bot directamente ──
+  // ── Menciones al bot directamente — sin cooldown, es conversación ──
   const botUsername = (channelConfigs[channelName]?.custom_bot_username || TWITCH_BOT_USERNAME).toLowerCase();
   if (msgLower.includes(`@${botUsername}`) && !msgLower.startsWith('!')) {
     if (!config.ai_enabled) return;
     const question = message.replace(new RegExp(`@${botUsername}`, 'gi'), '').trim();
-    client.say(channel, `@${username} ${await getMuffetResponse(channelName, question || '¡Hola!', username)}`);
+    const response = await getMuffetResponse(channelName, question || '¡Hola!', username);
+    botSay(client, channel, `@${username} ${response}`, true); // conversación = sin cooldown
     return;
   }
 }
@@ -1168,7 +1231,7 @@ function setupEvents(client) {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
     const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username);
-    client.say(channel, msg);
+    botSay(client, channel, msg, true);
   });
 
   client.on('subscription', async (channel, username, methods) => {
@@ -1176,14 +1239,14 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false) return;
     const tier = methods?.plan === '3000' ? 'Tier 3' : methods?.plan === '2000' ? 'Tier 2' : 'Tier 1';
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username);
-    client.say(channel, msg);
+    botSay(client, channel, msg, true);
   });
 
   client.on('resub', async (channel, username, months) => {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
     const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username);
-    client.say(channel, msg);
+    botSay(client, channel, msg, true);
   });
 
   // Sub gift individual
@@ -1192,7 +1255,7 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false) return;
     if (username === 'ananonymousgifter') return;
     const msg = await getMuffetResponse(ch, `@${username} le acaba de regalar una suscripción a @${recipient}. Menciona los dos nombres y agradécele lo generoso que es.`, username);
-    client.say(channel, msg);
+    botSay(client, channel, msg, true);
   });
 
   // Gift masivo (cuando regalan 5, 10, 20 subs a la vez)
@@ -1200,7 +1263,7 @@ function setupEvents(client) {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
     const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
-    client.say(channel, msg);
+    botSay(client, channel, msg, true);
   });
 
   // Bits
@@ -1210,7 +1273,7 @@ function setupEvents(client) {
     const username = tags.username;
     const bits = tags.bits;
     const msg = await getMuffetResponse(ch, `@${username} acaba de donar ${bits} bits al canal. Agradécele con entusiasmo.`, username);
-    client.say(channel, msg);
+    botSay(client, channel, msg, true);
   });
 }
 
