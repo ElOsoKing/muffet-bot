@@ -152,7 +152,7 @@ function formatSocials(social_links) {
   const icons = { twitch:'🎮', youtube:'📺', tiktok:'🎵', twitter:'🐦', instagram:'📸', discord:'💬', youtube_channel:'▶️' };
   const labels = { twitch:'Twitch', youtube:'YouTube', tiktok:'TikTok', twitter:'Twitter', instagram:'Instagram', discord:'Discord', youtube_channel:'YouTube' };
   return Object.entries(social_links)
-    .filter(([,v]) => v)
+    .filter(([k,v]) => v && k !== 'accent_color')
     .map(([k,v]) => `${icons[k]||'🔗'} ${labels[k]||k}: ${v}`)
     .join(' | ');
 }
@@ -1273,17 +1273,54 @@ async function start() {
   // Configurar bots personalizados para usuarios Pro
   await setupCustomBots();
 
+  // Rastrear última actividad del chat por canal
+  const lastChatActivity = {};
+
+  // Cola anti-spam para auto mensajes
+  const autoMsgQueue = {};
+  async function processAutoMsgQueue(ch) {
+    if (autoMsgQueue[ch]?.processing) return;
+    if (!autoMsgQueue[ch]?.items?.length) return;
+    autoMsgQueue[ch].processing = true;
+    while (autoMsgQueue[ch].items.length > 0) {
+      const { text, type, channelName } = autoMsgQueue[ch].items.shift();
+      const client = customClients[channelName] || mainClient;
+      try {
+        if (type === 'ai') {
+          const chConfig = channelConfigs[channelName];
+          const aiMsg = await groq.chat.completions.create({
+            model: 'llama-3.1-8b-instant',
+            messages: [
+              { role: 'system', content: chConfig.bot_prompt },
+              { role: 'user', content: `Escribe un mensaje corto para el chat sobre: "${text}". Máximo 1 oración con tu personalidad.` }
+            ],
+            max_tokens: 100, temperature: 0.9,
+          });
+          const aiText = aiMsg.choices[0]?.message?.content || text;
+          client.say(`#${channelName}`, aiText).catch(() => {});
+        } else {
+          client.say(`#${channelName}`, text).catch(() => {});
+        }
+      } catch(e) {
+        client.say(`#${channelName}`, text).catch(() => {});
+      }
+      if (autoMsgQueue[ch].items.length > 0) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    autoMsgQueue[ch].processing = false;
+  }
+
   // Auto mensajes por canal con timer individual por mensaje
   const autoMsgIntervals = {};
 
   function scheduleAutoMessages() {
     for (const [ch, config] of Object.entries(channelConfigs)) {
       if (!config.auto_messages?.length) continue;
-      if (autoMsgIntervals[ch]?.length) continue; // Ya tiene timers activos, no recrear
+      if (autoMsgIntervals[ch]?.length) continue;
       autoMsgIntervals[ch] = [];
 
       config.auto_messages.forEach(msg => {
-        // Soportar formato antiguo (string) y nuevo (objeto)
         const text     = typeof msg === 'object' ? msg.text     : msg;
         const type     = typeof msg === 'object' ? msg.type     : 'fixed';
         const interval = typeof msg === 'object' ? msg.interval : (config.auto_message_interval || 20);
@@ -1291,34 +1328,30 @@ async function start() {
 
         const timer = setInterval(async () => {
           if (muffetActiveMap[ch] === false) return;
-          const client = customClients[ch] || mainClient;
-          try {
-            if (type === 'ai') {
-              const chConfig = channelConfigs[ch];
-              const aiMsg = await groq.chat.completions.create({
-                model: 'llama-3.1-8b-instant',
-                messages: [
-                  { role: 'system', content: chConfig.bot_prompt },
-                  { role: 'user', content: `Escribe un mensaje corto para el chat de Twitch sobre este tema: "${text}". Máximo 1 oración, con tu personalidad característica.` }
-                ],
-                max_tokens: 100,
-                temperature: 0.9,
-              });
-              const aiText = aiMsg.choices[0]?.message?.content || text;
-              client.say(`#${ch}`, aiText).catch(e => console.error(`❌ Error say #${ch}:`, e.message));
-            } else {
-              client.say(`#${ch}`, text).catch(e => console.error(`❌ Error say #${ch}:`, e.message));
-            }
-          } catch(e) {
-            console.error(`❌ Error auto msg #${ch}:`, e.message);
-            client.say(`#${ch}`, text).catch(e2 => console.error(`❌ Fallback error:`, e2.message));
-          }
+          // No enviar si el chat lleva más de 10 min inactivo
+          const lastActivity = lastChatActivity[ch];
+          if (!lastActivity || Date.now() - lastActivity > 10 * 60 * 1000) return;
+          // Agregar a la cola
+          if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
+          autoMsgQueue[ch].items.push({ text, type, channelName: ch });
+          processAutoMsgQueue(ch);
         }, intervalMs);
 
         autoMsgIntervals[ch].push(timer);
       });
     }
   }
+
+  // Registrar actividad del chat
+  mainClient.on('message', (channel) => {
+    const ch = channel.replace('#','');
+    lastChatActivity[ch] = Date.now();
+  });
+  Object.values(customClients).forEach(c => {
+    c.on('message', (channel) => {
+      lastChatActivity[channel.replace('#','')] = Date.now();
+    });
+  });
 
   scheduleAutoMessages();
 
