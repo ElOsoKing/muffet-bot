@@ -1471,6 +1471,9 @@ async function start() {
   // Configurar bots personalizados para usuarios Pro
   await setupCustomBots();
 
+  // Iniciar polling de ganadores de sorteo
+  setInterval(checkRaffleWinners, 5000);
+
   // Rastrear última actividad del chat por canal
   const lastChatActivity = {};
 
@@ -1617,9 +1620,8 @@ async function handleTwitchEvent(type, event) {
   } catch(e) {}
 }
 
-// Servidor interno para recibir eventos desde el dashboard
 // ── Polling de ganadores de sorteo ──
-const announcedWinners = {}; // { channelName: winnerId }
+const announcedWinners = {};
 
 async function checkRaffleWinners() {
   try {
@@ -1627,17 +1629,13 @@ async function checkRaffleWinners() {
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
     const streamers = await res.json();
     if (!Array.isArray(streamers)) return;
-
     for (const s of streamers) {
       const ch = s.twitch_username?.toLowerCase();
       const raffle = s.raffle_active;
       if (!ch || !raffle?.winner || raffle.active) continue;
-
-      // Solo anunciar si es un ganador nuevo
       const winnerId = `${ch}_${raffle.winner}_${raffle.ended_at||''}`;
       if (announcedWinners[ch] === winnerId) continue;
       announcedWinners[ch] = winnerId;
-
       if (!channelConfigs[ch]) continue;
       const client = customClients[ch] || mainClient;
       try {
@@ -1650,5 +1648,4 @@ async function checkRaffleWinners() {
   } catch(e) {}
 }
 
-// Revisar cada 5 segundos
-setInterval(checkRaffleWinners, 5000);
+start().catch(console.error);
