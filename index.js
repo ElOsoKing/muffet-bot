@@ -1618,23 +1618,37 @@ async function handleTwitchEvent(type, event) {
 }
 
 // Servidor interno para recibir eventos desde el dashboard
-const botServer = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/event') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
+// ── Polling de ganadores de sorteo ──
+const announcedWinners = {}; // { channelName: winnerId }
+
+async function checkRaffleWinners() {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,raffle_active`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const streamers = await res.json();
+    if (!Array.isArray(streamers)) return;
+
+    for (const s of streamers) {
+      const ch = s.twitch_username?.toLowerCase();
+      const raffle = s.raffle_active;
+      if (!ch || !raffle?.winner || raffle.active) continue;
+
+      // Solo anunciar si es un ganador nuevo
+      const winnerId = `${ch}_${raffle.winner}_${raffle.ended_at||''}`;
+      if (announcedWinners[ch] === winnerId) continue;
+      announcedWinners[ch] = winnerId;
+
+      if (!channelConfigs[ch]) continue;
+      const client = customClients[ch] || mainClient;
       try {
-        const { secret, type, event } = JSON.parse(body);
-        if (secret !== BOT_SECRET) { res.writeHead(403); res.end(); return; }
-        handleTwitchEvent(type, event);
-        res.writeHead(200); res.end('OK');
-      } catch(e) { res.writeHead(400); res.end(); }
-    });
-  } else { res.writeHead(404); res.end(); }
-});
+        const msg = await getMuffetResponse(ch, `¡Anuncia emocionado que @${raffle.winner} ganó el sorteo! El premio es: ${raffle.prize}. Sé entusiasta y usa tu personalidad.`, raffle.winner);
+        client.say(`#${ch}`, msg);
+      } catch(e) {
+        client.say(`#${ch}`, `🎉 ¡El ganador del sorteo es @${raffle.winner}! Premio: ${raffle.prize} 🏆🕷️`);
+      }
+    }
+  } catch(e) {}
+}
 
-botServer.listen(BOT_PORT, () => {
-  console.log(`🤖 Bot event server en puerto ${BOT_PORT}`);
-});
-
-start().catch(console.error);
+// Revisar cada 5 segundos
+setInterval(checkRaffleWinners, 5000);
