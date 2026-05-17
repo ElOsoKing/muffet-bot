@@ -570,8 +570,10 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
       // Verificar límite por usuario
       const maxPerUser = spotifyConfig.max_per_user || 3;
-      if (!spotifyQueueCount[channelName]) spotifyQueueCount[channelName] = {};
-      const userCount = spotifyQueueCount[channelName][username.toLowerCase()] || 0;
+      const chKey = channelName.replace('#','').toLowerCase();
+      if (!spotifyQueueCount[chKey]) spotifyQueueCount[chKey] = {};
+      const userKey = username.toLowerCase();
+      const userCount = spotifyQueueCount[chKey][userKey] || 0;
       if (userCount >= maxPerUser && !isMod(tags, channelName)) {
         client.say(channel, `@${username} Ya pediste ${userCount}/${maxPerUser} canciones~ Espera a que suenen 🎵`);
         return;
@@ -590,7 +592,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       });
       if (queueRes.status === 204 || queueRes.status === 200) {
         // Actualizar conteo del usuario
-        spotifyQueueCount[channelName][username.toLowerCase()] = userCount + 1;
+        spotifyQueueCount[chKey][userKey] = userCount + 1;
         const remaining = maxPerUser - (userCount + 1);
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
@@ -1218,7 +1220,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   // ── Entrar al sorteo ──
   const raffleConfig = channelConfigs[channelName];
   const joinCmd = raffleConfig?.raffle_settings?.join_cmd || '!entrar';
-  if (firstWord === joinCmd || firstWord === '!entrar') {
+  if (firstWord === joinCmd) {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
@@ -1569,6 +1571,19 @@ async function start() {
 
 // ── Handler de eventos de Twitch (follows, subs, bits) ──
 async function handleTwitchEvent(type, event) {
+  // ── Ganador del sorteo desde el dashboard ──
+  if (type === 'raffle.winner') {
+    const channelName = event.broadcaster_user_login?.toLowerCase();
+    if (!channelName) return;
+    const client = customClients[channelName] || mainClient;
+    try {
+      const winnerMsg = await getMuffetResponse(channelName, `¡Anuncia emocionado que @${event.winner} ganó el sorteo! El premio es: ${event.prize}. Sé entusiasta y usa tu personalidad.`, event.winner);
+      client.say(`#${channelName}`, winnerMsg);
+    } catch(e) {
+      client.say(`#${channelName}`, `🎉 ¡El ganador del sorteo es @${event.winner}! Premio: ${event.prize} 🏆🕷️`);
+    }
+    return;
+  }
   const channelName = event.broadcaster_user_login?.toLowerCase();
   if (!channelName || !channelConfigs[channelName]) return;
 
