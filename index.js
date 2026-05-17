@@ -1219,8 +1219,8 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── Entrar al sorteo ──
   const raffleConfig = channelConfigs[channelName];
-  const joinCmd = raffleConfig?.raffle_settings?.join_cmd || '!entrar';
-  if (firstWord === joinCmd) {
+  const joinCmd = (raffleConfig?.raffle_settings?.join_cmd || '!entrar').toLowerCase().trim();
+  if (firstWord.toLowerCase() === joinCmd) {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
@@ -1265,7 +1265,8 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       });
       const uniqueCount = [...new Set(participants)].length;
       const entryMsg = entries > 1 ? ` (x${entries} entradas)` : '';
-      client.say(channel, `✅ @${username} ¡Entraste al sorteo!${entryMsg} Somos ${uniqueCount} participantes 🎉🕷️`);
+      const participantWord = uniqueCount === 1 ? 'participante' : 'participantes';
+      client.say(channel, `✅ @${username} ¡Entraste al sorteo!${entryMsg} Somos ${uniqueCount} ${participantWord} 🎉🕷️`);
     } catch(e) {}
     return;
   }
