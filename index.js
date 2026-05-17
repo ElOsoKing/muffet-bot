@@ -67,6 +67,7 @@ async function loadAllChannels() {
         points_config:      s.points_config      || {},
         viewer_points:      s.viewer_points      || {},
         social_links:       s.social_links       || {},
+        raffle_settings:    s.raffle_settings    || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -1190,8 +1191,8 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ raffle_active: { active: false, prize: raffle.prize, winner, participants: [] } })
         });
-        const winnerMsg = await getMuffetResponse(channelName, `¡Anuncia emocionado que @${winner} ganó el sorteo! El premio es: ${raffle.prize}. Sé entusiasta y usa tu personalidad.`, winner);
-        client.say(channel, winnerMsg);
+        const winnerMsg = await getMuffetResponse(channelName, `Anuncia que @${winner} ganó el sorteo. El premio es: ${raffle.prize}. IMPORTANTE: menciona el nombre @${winner} explícitamente.`, winner);
+        client.say(channel, `@${winner} ${winnerMsg}`);
       } catch(e) { client.say(channel, '⚠️ Error al terminar el sorteo'); }
       return;
     }
@@ -1582,7 +1583,7 @@ async function handleTwitchEvent(type, event) {
     const client = customClients[channelName] || mainClient;
     try {
       const winnerMsg = await getMuffetResponse(channelName, `¡Anuncia emocionado que @${event.winner} ganó el sorteo! El premio es: ${event.prize}. Sé entusiasta y usa tu personalidad.`, event.winner);
-      client.say(`#${channelName}`, winnerMsg);
+      client.say(`#${channelName}`, `@${event.winner} ${winnerMsg}`);
     } catch(e) {
       client.say(`#${channelName}`, `🎉 ¡El ganador del sorteo es @${event.winner}! Premio: ${event.prize} 🏆🕷️`);
     }
@@ -1639,8 +1640,8 @@ async function checkRaffleWinners() {
       if (!channelConfigs[ch]) continue;
       const client = customClients[ch] || mainClient;
       try {
-        const msg = await getMuffetResponse(ch, `¡Anuncia emocionado que @${raffle.winner} ganó el sorteo! El premio es: ${raffle.prize}. Sé entusiasta y usa tu personalidad.`, raffle.winner);
-        client.say(`#${ch}`, msg);
+        const msg = await getMuffetResponse(ch, `Anuncia que @${raffle.winner} ganó el sorteo. El premio es: ${raffle.prize}. IMPORTANTE: menciona el nombre @${raffle.winner} explícitamente en tu respuesta.`, raffle.winner);
+        client.say(`#${ch}`, `@${raffle.winner} ${msg}`);
       } catch(e) {
         client.say(`#${ch}`, `🎉 ¡El ganador del sorteo es @${raffle.winner}! Premio: ${raffle.prize} 🏆🕷️`);
       }
