@@ -1138,8 +1138,22 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   if (firstWord === '!cmds' || firstWord === '!comandos') {
     const config = channelConfigs[channelName];
-    const cmds = Object.keys(config.commands || {}).join(' • ');
-    client.say(channel, cmds ? `📋 Comandos: ${cmds} 🕷️` : `No hay comandos configurados aún~ 🕷️`);
+    const sys = config.system_commands || {};
+
+    // Comandos del sistema activos
+    const sysActive = [
+      ['game', '!game'], ['titulo', '!titulo'], ['uptime', '!uptime'],
+      ['clip', '!clip'], ['redes', '!redes'], ['puntos', '!puntos'],
+      ['top', '!top'], ['apostar', '!apostar'], ['canjear', '!canjear'],
+      ['sorteo', '!sorteo'], ['random', '!random'], ['ask', '!ask'],
+      ['chiste', '!chiste'], ['poll', '!poll'], ['cancion', '!cancion'],
+    ].filter(([id]) => sys[id] !== false).map(([, cmd]) => cmd);
+
+    // Comandos personalizados
+    const custom = Object.keys(config.commands || {});
+
+    const all = [...sysActive, ...custom];
+    client.say(channel, all.length ? `📋 Comandos: ${all.join(' • ')} 🕷️` : `No hay comandos configurados~ 🕷️`);
     return;
   }
 
