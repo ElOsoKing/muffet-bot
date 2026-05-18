@@ -588,11 +588,29 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       }
 
       // !cancion nombre — buscar y agregar
-      const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`,
+      // Detectar formato "cancion - artista" para búsqueda más precisa
+      let searchQuery = query;
+      if (query.includes(' - ')) {
+        const parts = query.split(' - ');
+        const trackName = parts[0].trim();
+        const artistName = parts.slice(1).join(' - ').trim();
+        searchQuery = `track:"${trackName}" artist:"${artistName}"`;
+      }
+
+      // Buscar 5 resultados y elegir el más relevante
+      const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=5`,
         { headers: { 'Authorization': `Bearer ${token}` } });
       const searchData = await searchRes.json();
-      const track = searchData.tracks?.items?.[0];
-      if (!track) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
+      const tracks = searchData.tracks?.items || [];
+      if (!tracks.length) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
+
+      // Elegir el mejor resultado comparando con la búsqueda original
+      const queryLower = query.toLowerCase().replace(' - ', ' ');
+      const track = tracks.reduce((best, t) => {
+        const combined = `${t.name} ${t.artists[0].name}`.toLowerCase();
+        const score = queryLower.split(' ').filter(w => w.length > 1 && combined.includes(w)).length;
+        return score > (best.score || 0) ? { ...t, score } : best;
+      }, tracks[0]);
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
