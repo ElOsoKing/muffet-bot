@@ -1146,7 +1146,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       ['clip', '!clip'], ['redes', '!redes'], ['puntos', '!puntos'],
       ['top', '!top'], ['apostar', '!apostar'], ['canjear', '!canjear'],
       ['sorteo', '!sorteo'], ['random', '!random'], ['ask', '!ask'],
-      ['chiste', '!chiste'], ['poll', '!poll'], ['cancion', '!cancion'],
+      ['chiste', '!chiste'], ['bola8', '!8ball'], ['poll', '!poll'], ['cancion', '!cancion'],
     ].filter(([id]) => sys[id] !== false).map(([, cmd]) => cmd);
 
     // Comandos personalizados
@@ -1379,6 +1379,18 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     } else {
       client.say(channel, `@${username} No hay redes configuradas aún~ 🕷️`);
     }
+    return;
+  }
+
+  // ── !8ball ──
+  if (firstWord === '!8ball' || firstWord === '!bola8') {
+    if (!isSysCmdEnabled(channelName, 'bola8')) return;
+    const question = message.trim().slice(firstWord.length).trim();
+    if (!question) { client.say(channel, `@${username} ¡Hazme una pregunta! Ej: !8ball ¿Ganaré hoy? 🎱🕷️`); return; }
+    const response = await getMuffetResponse(channelName,
+      `El usuario @${username} pregunta a la bola mágica: "${question}". Da una respuesta corta y misteriosa de la bola 8 mágica. Puede ser positiva, negativa o ambigua. Usa tu personalidad. Máximo 1 oración.`,
+      username);
+    client.say(channel, `🎱 @${username} ${response}`);
     return;
   }
 
