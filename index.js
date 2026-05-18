@@ -434,7 +434,7 @@ async function handleMessage(client, channel, tags, message, self) {
   if (!greetedMap[channelName].has(username.toLowerCase())) {
     greetedMap[channelName].add(username.toLowerCase());
 
-    // Detectar viewbots — no saludar si el primer mensaje tiene links o patrones sospechosos
+    // No saludar si el primer mensaje es un comando o viewbot
     const isViewbot = /https?:\/\//i.test(message) ||
       /buy\s*(followers|viewers|views|subs)/i.test(message) ||
       /get\s*(views|viewers|followers)/i.test(message) ||
@@ -442,8 +442,9 @@ async function handleMessage(client, channel, tags, message, self) {
       /cheap.*follow/i.test(message) ||
       /t\.me\//i.test(message) ||
       /bit\.ly\//i.test(message);
+    const isCommand = message.trim().startsWith('!');
 
-    if (!isViewbot) {
+    if (!isViewbot && !isCommand) {
       setTimeout(async () => {
         try {
           const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
