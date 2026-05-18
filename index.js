@@ -69,6 +69,7 @@ async function loadAllChannels() {
         social_links:       s.social_links       || {},
         raffle_settings:    s.raffle_settings    || {},
         system_commands:    s.system_commands    || {},
+        primerin_config:    s.primerin_config    || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -1380,6 +1381,40 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     } else {
       client.say(channel, `@${username} No hay redes configuradas aún~ 🕷️`);
     }
+    return;
+  }
+
+  // ── !primerin (comando configurable) ──
+  const pConfig = config.primerin_config || {};
+  const pCmd = '!' + (pConfig.command || 'primerin').toLowerCase();
+  if (firstWord.toLowerCase() === pCmd) {
+    const today = new Date().toISOString().split('T')[0];
+    const usedToday = pConfig.used_today || {};
+
+    // Ya alguien ganó hoy
+    if (usedToday.date === today) {
+      client.say(channel, `🥇 @${usedToday.winner} fue el primero hoy~ 🕷️`);
+      return;
+    }
+
+    // ¡Este usuario es el primero!
+    const ranking = pConfig.ranking || {};
+    ranking[username.toLowerCase()] = (ranking[username.toLowerCase()] || 0) + 1;
+
+    const newConfig = { ...pConfig, ranking, used_today: { date: today, winner: username } };
+    channelConfigs[channelName].primerin_config = newConfig;
+
+    await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ primerin_config: newConfig })
+    }).catch(() => {});
+
+    const wins = ranking[username.toLowerCase()];
+    const msg = await getMuffetResponse(channelName,
+      `¡@${username} llegó primero al stream hoy! Lleva ${wins} vez${wins>1?'es':''} siendo el primero. Anúncialo emocionado con tu personalidad.`,
+      username);
+    client.say(channel, msg);
     return;
   }
 
