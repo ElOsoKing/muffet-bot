@@ -68,6 +68,7 @@ async function loadAllChannels() {
         viewer_points:      s.viewer_points      || {},
         social_links:       s.social_links       || {},
         raffle_settings:    s.raffle_settings    || {},
+        system_commands:    s.system_commands    || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -289,6 +290,11 @@ function botSay(client, channel, message, isConversation = false) {
   registerBotMsg(ch);
   return true;
 }
+function isSysCmdEnabled(channelName, cmdId) {
+  const sys = channelConfigs[channelName]?.system_commands || {};
+  return sys[cmdId] !== false; // activo por defecto
+}
+
 // ── Bots conocidos a ignorar ──
 const KNOWN_BOTS = new Set([
   'streamelements','nightbot','fossabot','moobot','streamlabs','wizebot',
@@ -530,6 +536,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   }
 
   if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
+    if (!isSysCmdEnabled(channelName, 'cancion')) return;
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -620,6 +627,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !titulo — cambiar título del stream ──
   if (firstWord === '!titulo' || firstWord === '!title') {
+    if (!isSysCmdEnabled(channelName, 'titulo')) return;
     if (!isMod(tags, channelName)) return;
     const newTitle = message.trim().slice(firstWord.length).trim();
     if (!newTitle) { client.say(channel, `@${username} Uso: !titulo Mi nuevo título 🕷️`); return; }
@@ -643,6 +651,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !juego — cambiar categoría del stream ──
   if (firstWord === '!juego' || firstWord === '!game') {
+    if (!isSysCmdEnabled(channelName, 'game')) return;
     if (!isMod(tags, channelName)) return;
     const gameName = message.trim().slice(firstWord.length).trim();
     if (!gameName) { client.say(channel, `@${username} Uso: !juego Minecraft 🕷️`); return; }
@@ -672,6 +681,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !apostar ──
   if (firstWord === '!apostar' || firstWord === '!bet') {
+    if (!isSysCmdEnabled(channelName, 'apostar')) return;
     const pointsConfig = config.points_config || {};
     if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
     const amount = parseInt(message.trim().split(' ')[1]);
@@ -704,6 +714,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !canjear ──
   if (firstWord === '!canjear' || firstWord === '!redeem') {
+    if (!isSysCmdEnabled(channelName, 'canjear')) return;
     const pointsConfig = config.points_config || {};
     if (!pointsConfig.enabled) return;
     const rewards = pointsConfig.rewards || [];
@@ -799,6 +810,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── Comandos de puntos ──
   if (firstWord === '!puntos' || firstWord === '!xp' || firstWord === '!nivel' || firstWord === '!level') {
+    if (!isSysCmdEnabled(channelName, 'puntos')) return;
     const target = message.trim().split(' ')[1]?.replace('@','').toLowerCase() || username.toLowerCase();
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
     const xp = viewerPoints[target] || 0;
@@ -814,6 +826,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   }
 
   if (firstWord === '!top' || firstWord === '!ranking') {
+    if (!isSysCmdEnabled(channelName, 'top')) return;
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
     const pointsConfig = config.points_config || {};
     const emoji = pointsConfig.emoji || '🏆';
@@ -825,6 +838,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   }
 
   if (firstWord === '!dar' || firstWord === '!give') {
+    if (!isSysCmdEnabled(channelName, 'dar')) return;
     if (!isMod(tags, channelName)) return;
     const parts = message.trim().split(' ');
     const amount = parseInt(parts[1]);
@@ -845,6 +859,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !clip ──
   if (firstWord === '!clip') {
+    if (!isSysCmdEnabled(channelName, 'clip')) return;
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -873,6 +888,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !random ──
   if (firstWord === '!random' || firstWord === '!dado' || firstWord === '!ruleta') {
+    if (!isSysCmdEnabled(channelName, 'random')) return;
     const parts = message.trim().split(' ').slice(1);
     const subCmd = parts[0]?.toLowerCase();
 
@@ -1068,6 +1084,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   // ── Encuestas ──
   // Uso: !poll ¿Qué jugamos? Minecraft Fortnite Valorant
   if (firstWord === '!poll' || firstWord === '!encuesta') {
+    if (!isSysCmdEnabled(channelName, 'poll')) return;
     if (!isMod(tags, channelName)) return;
     const parts = message.trim().slice(firstWord.length).trim().split('?');
     if (parts.length < 2) { client.say(channel, `@${username} Uso: !poll ¿Pregunta? Opcion1 Opcion2 Opcion3 🕷️`); return; }
@@ -1162,6 +1179,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── Sorteo ──
   if (firstWord === '!sorteo') {
+    if (!isSysCmdEnabled(channelName, 'sorteo')) return;
     const subCmd = msgLower.split(' ')[1];
     if (subCmd === 'crear' || subCmd === 'start') {
       if (!isMod(tags, channelName)) return;
@@ -1274,6 +1292,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !redes automático ──
   if (firstWord === '!redes') {
+    if (!isSysCmdEnabled(channelName, 'redes')) return;
     const socials = formatSocials(config?.social_links || {});
     if (socials) {
       client.say(channel, `🌐 Redes de ${channelName}: ${socials} 🕷️♥`);
@@ -1289,6 +1308,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
 
   // ── !chiste ──
   if (firstWord === '!chiste' || firstWord === '!joke') {
+    if (!isSysCmdEnabled(channelName, 'chiste')) return;
     if (hasUserCooldown(channelName, `chiste_${username}`) && !isMod(tags, channelName)) {
       const secs = getCooldownRemaining(channelName, `chiste_${username}`);
       client.say(channel, `@${username} Espera ${secs}s antes de pedir otro chiste~ 🕷️`);
@@ -1305,6 +1325,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   }
 
   if (firstWord === '!ask' || firstWord === '!pregunta') {
+    if (!isSysCmdEnabled(channelName, 'ask')) return;
     if (!config.ai_enabled) { client.say(channel, `@${username} ¡La IA está descansando, dearie! 🕷️`); return; }
     const question = message.trim().slice(firstWord.length).trim();
     if (!question) { client.say(channel, `¡${username}, dearie! Escribe: !ask ¿tu pregunta? 🕷️`); return; }
