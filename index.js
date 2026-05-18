@@ -590,18 +590,30 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       // !cancion nombre — buscar y agregar
       // Detectar formato "cancion - artista" para búsqueda más precisa
       let searchQuery = query;
+      let fallbackQuery = query;
       if (query.includes(' - ')) {
         const parts = query.split(' - ');
         const trackName = parts[0].trim();
         const artistName = parts.slice(1).join(' - ').trim();
-        searchQuery = `track:"${trackName}" artist:"${artistName}"`;
+        searchQuery = `track:${trackName} artist:${artistName}`;
+        fallbackQuery = `${trackName} ${artistName}`;
       }
 
-      // Buscar 5 resultados y elegir el más relevante
-      const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=5`,
+      // Buscar con query principal, si no hay resultados usar fallback sin filtros
+      let tracks = [];
+      const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=5&market=ES`,
         { headers: { 'Authorization': `Bearer ${token}` } });
       const searchData = await searchRes.json();
-      const tracks = searchData.tracks?.items || [];
+      tracks = searchData.tracks?.items || [];
+
+      // Si no hay resultados o búsqueda avanzada falló, intentar búsqueda simple
+      if (!tracks.length && searchQuery !== fallbackQuery) {
+        const fallRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(fallbackQuery)}&type=track&limit=5&market=ES`,
+          { headers: { 'Authorization': `Bearer ${token}` } });
+        const fallData = await fallRes.json();
+        tracks = fallData.tracks?.items || [];
+      }
+
       if (!tracks.length) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
 
       // Elegir el mejor resultado comparando con la búsqueda original
@@ -609,8 +621,8 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       const track = tracks.reduce((best, t) => {
         const combined = `${t.name} ${t.artists[0].name}`.toLowerCase();
         const score = queryLower.split(' ').filter(w => w.length > 1 && combined.includes(w)).length;
-        return score > (best.score || 0) ? { ...t, score } : best;
-      }, tracks[0]);
+        return score > (best._score || 0) ? { ...t, _score: score } : best;
+      }, { ...tracks[0], _score: 0 });
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
@@ -640,6 +652,30 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       });
       client.say(channel, `⏭️ Canción saltada~ 🎵`);
     } catch(e) {}
+    return;
+  }
+
+  // ── !uptime ──
+  if (firstWord === '!uptime') {
+    if (!isSysCmdEnabled(channelName, 'uptime')) return;
+    try {
+      const streamer = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await streamer.json();
+      const token = data?.[0]?.access_token;
+      if (!token) { client.say(channel, `@${username} No pude obtener el uptime~ 🕷️`); return; }
+      const streamRes = await fetch(`https://api.twitch.tv/helix/streams?user_login=${channelName}`,
+        { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID } });
+      const streamData = await streamRes.json();
+      const stream = streamData.data?.[0];
+      if (!stream) { client.say(channel, `@${username} El canal no está en vivo~ 🕷️`); return; }
+      const start = new Date(stream.started_at);
+      const diff = Math.floor((Date.now() - start.getTime()) / 1000);
+      const h = Math.floor(diff / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      const uptime = h > 0 ? `${h}h ${m}m` : `${m}m`;
+      client.say(channel, `⏱️ Llevamos ${uptime} en vivo~ 🕷️`);
+    } catch(e) { client.say(channel, `@${username} No pude obtener el uptime~ 🕷️`); }
     return;
   }
 
