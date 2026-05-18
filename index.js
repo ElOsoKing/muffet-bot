@@ -1149,6 +1149,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       ['top', '!top'], ['apostar', '!apostar'], ['canjear', '!canjear'],
       ['sorteo', '!sorteo'], ['random', '!random'], ['ask', '!ask'],
       ['chiste', '!chiste'], ['bola8', '!8ball'], ['poll', '!poll'], ['cancion', '!cancion'],
+      ['primerin', '!' + (channelConfigs[channelName]?.primerin_config?.command || 'primerin')],
     ].filter(([id]) => sys[id] !== false).map(([, cmd]) => cmd);
 
     // Comandos personalizados
@@ -1388,6 +1389,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   const pConfig = config.primerin_config || {};
   const pCmd = '!' + (pConfig.command || 'primerin').toLowerCase();
   if (firstWord.toLowerCase() === pCmd) {
+    if (!isSysCmdEnabled(channelName, 'primerin')) return;
     const today = new Date().toISOString().split('T')[0];
     const usedToday = pConfig.used_today || {};
 
