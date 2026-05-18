@@ -72,7 +72,7 @@ async function loadAllChannels() {
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
-      if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = true;
+      if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = s.on_off_ai !== false;
       if (!greetedMap[ch]) greetedMap[ch] = new Set();
     });
 
@@ -394,6 +394,10 @@ async function handleMessage(client, channel, tags, message, self) {
   if (firstWord === '!muffeton') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = true;
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on_off_ai: true })
+    }).catch(() => {});
     let onMsg;
     if (config.on_off_ai !== false) {
       onMsg = await getMuffetResponse(channelName, 'Anuncia brevemente que acabas de activarte y estás lista para interactuar con el chat. Habla en primera persona según tu personalidad.', username);
@@ -406,6 +410,10 @@ async function handleMessage(client, channel, tags, message, self) {
   if (firstWord === '!muffetoff') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = false;
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on_off_ai: false })
+    }).catch(() => {});
     let offMsg;
     if (config.on_off_ai !== false) {
       offMsg = await getMuffetResponse(channelName, 'Anuncia brevemente que te vas a descansar y te despides del chat. Habla en primera persona según tu personalidad.', username);
