@@ -469,14 +469,17 @@ async function handleMessage(client, channel, tags, message, self) {
     const isCommand = message.trim().startsWith('!');
 
     if (!isViewbot && !isCommand && !muffetSilentMap[channelName]) {
-      setTimeout(async () => {
-        try {
-          const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
-          botSay(client, channel, welcomeMsg, true);
-        } catch(e) {
-          client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
-        }
-      }, 2000);
+      const isBroadcaster = tags.badges?.broadcaster === '1' || username.toLowerCase() === channelName.toLowerCase();
+      if (!isBroadcaster) {
+        setTimeout(async () => {
+          try {
+            const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
+            botSay(client, channel, welcomeMsg, true);
+          } catch(e) {
+            client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
+          }
+        }, 2000);
+      }
     }
   }
 
