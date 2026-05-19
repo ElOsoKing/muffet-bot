@@ -1403,16 +1403,8 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   // ── !redes automático ──
   if (firstWord === '!redes') {
     if (!isSysCmdEnabled(channelName, 'redes')) return;
-    const socials = formatSocials(config?.social_links || {});
-    if (socials) {
-      client.say(channel, `🌐 Redes de ${channelName}: ${socials} 🕷️♥`);
-    } else if (config?.commands?.['!redes']) {
-      const cmd = config.commands['!redes'];
-      const response = typeof cmd === 'object' ? cmd.response : cmd;
-      client.say(channel, response);
-    } else {
-      client.say(channel, `@${username} No hay redes configuradas aún~ 🕷️`);
-    }
+    const BASE = process.env.BASE_URL || 'https://muffet-dashboard.onrender.com';
+    client.say(channel, `🌐 Encuentra todas las redes de ${channelName} aquí: ${BASE}/canal/${channelName} 🕷️♥`);
     return;
   }
 
