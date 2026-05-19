@@ -1745,7 +1745,7 @@ async function start() {
 
   scheduleAutoMessages();
 
-  // Recargar config cada 2 minutos
+  // Recargar config cada 30 segundos
   setInterval(async () => {
     await loadAllChannels();
     await setupCustomBots();
@@ -1757,7 +1757,7 @@ async function start() {
         try { await mainClient.join(ch); console.log(`✅ Nuevo canal unido: ${ch}`); } catch(e) {}
       }
     }
-  }, 2 * 60 * 1000);
+  }, 30 * 1000);
 }
 
 // ── Handler de eventos de Twitch (follows, subs, bits) ──
