@@ -20,6 +20,7 @@ const groq = new Groq({ apiKey: GROQ_API_KEY });
 // ══════════════════════════════════════════
 let channelConfigs = {}; // { 'elosoking1': { bot_prompt, commands, ... } }
 let muffetActiveMap = {}; // { 'elosoking1': true/false }
+let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let greetedMap = {}; // { 'elosoking1': Set() }
 
 const defaultConfig = (username) => ({
@@ -396,6 +397,20 @@ async function handleMessage(client, channel, tags, message, self) {
   if (username.toLowerCase() === botName) return;
 
   // ── Comandos de control (solo mods) ──
+  if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
+    if (!isMod(tags, channelName)) return;
+    muffetSilentMap[channelName] = true;
+    client.say(channel, '🤫 Modo silencio activado — solo responderé comandos y menciones directas~ 🕷️');
+    return;
+  }
+
+  if (firstWord === '!muffethabla' || firstWord === '!muffetspeak') {
+    if (!isMod(tags, channelName)) return;
+    muffetSilentMap[channelName] = false;
+    client.say(channel, '🗣️ ¡Estoy de vuelta, dearies! Ya puedo hablar libremente~ 🕷️👑♥');
+    return;
+  }
+
   if (firstWord === '!muffeton') {
     if (!isMod(tags, channelName)) return;
     muffetActiveMap[channelName] = true;
@@ -430,7 +445,10 @@ async function handleMessage(client, channel, tags, message, self) {
   }
   if (firstWord === '!muffetstatus') {
     const active = muffetActiveMap[channelName] !== false;
-    client.say(channel, active ? `🟢 La guardiana está activa~ 🕷️♥` : `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`);
+    const silent = muffetSilentMap[channelName] === true;
+    client.say(channel, active
+      ? (silent ? `🤫 Activa pero en modo silencio — usa !muffethabla para que vuelva a hablar~ 🕷️` : `🟢 La guardiana está activa~ 🕷️♥`)
+      : `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`);
     return;
   }
 
@@ -449,7 +467,7 @@ async function handleMessage(client, channel, tags, message, self) {
       /bit\.ly\//i.test(message);
     const isCommand = message.trim().startsWith('!');
 
-    if (!isViewbot && !isCommand) {
+    if (!isViewbot && !isCommand && !muffetSilentMap[channelName]) {
       setTimeout(async () => {
         try {
           const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
@@ -1685,6 +1703,7 @@ async function start() {
 
         const timer = setInterval(async () => {
           if (muffetActiveMap[ch] === false) return;
+          if (muffetSilentMap[ch]) return; // Modo silencio — no enviar auto mensajes
           const lastActivity = lastChatActivity[ch];
           if (!lastActivity || Date.now() - lastActivity > 10 * 60 * 1000) return;
           if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
