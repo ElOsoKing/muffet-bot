@@ -1705,7 +1705,7 @@ async function start() {
           if (muffetActiveMap[ch] === false) return;
           if (muffetSilentMap[ch]) return; // Modo silencio — no enviar auto mensajes
           const lastActivity = lastChatActivity[ch];
-          if (!lastActivity || Date.now() - lastActivity > 10 * 60 * 1000) return;
+          if (lastActivity && Date.now() - lastActivity > 10 * 60 * 1000) return;
           if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
           autoMsgQueue[ch].items.push({ text, type, channelName: ch });
           processAutoMsgQueue(ch);
