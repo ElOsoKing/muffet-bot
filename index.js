@@ -77,6 +77,8 @@ async function loadAllChannels() {
       };
       if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = s.on_off_ai !== false;
       if (!greetedMap[ch]) greetedMap[ch] = new Set();
+      // Pre-marcar al broadcaster para que nunca lo salude
+      greetedMap[ch].add(ch.toLowerCase());
     });
 
     console.log(`🐻🕷️ Config cargada para ${streamers.length} canales:`, streamers.map(s => s.twitch_username).join(', '));
@@ -470,7 +472,8 @@ async function handleMessage(client, channel, tags, message, self) {
 
     if (!isViewbot && !isCommand && !muffetSilentMap[channelName]) {
       // No saludar al broadcaster en su propio canal
-      const isBroadcaster = username.toLowerCase() === channelName.toLowerCase();
+      const isBroadcaster = (tags.username || '').toLowerCase() === channelName.toLowerCase() ||
+                            tags.badges?.broadcaster === '1';
       if (!isBroadcaster) {
         setTimeout(async () => {
           try {
