@@ -71,6 +71,7 @@ async function loadAllChannels() {
         raffle_settings:    s.raffle_settings    || {},
         system_commands:    s.system_commands    || {},
         primerin_config:    s.primerin_config    || {},
+        live_announcement:  s.live_announcement  || { enabled: false },
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -1644,6 +1645,9 @@ async function start() {
   // Iniciar polling de ganadores de sorteo
   setInterval(checkRaffleWinners, 5000);
 
+  // Iniciar polling de stream en vivo (cada 60s)
+  setInterval(checkStreamsLive, 60000);
+
   // Rastrear última actividad del chat por canal
   const lastChatActivity = {};
 
@@ -1819,4 +1823,46 @@ async function checkRaffleWinners() {
   } catch(e) {}
 }
 
-start().catch(console.error);
+// ── Polling de stream en vivo ──
+const streamLiveMap = {}; // { channelName: true/false } — si estaba en vivo
+
+async function checkStreamsLive() {
+  try {
+    for (const [ch, config] of Object.entries(channelConfigs)) {
+      const liveConfig = config.live_announcement || {};
+      if (!liveConfig.enabled) continue;
+
+      const token = await getTwitchAppToken();
+      const res = await fetch(`https://api.twitch.tv/helix/streams?user_login=${ch}`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
+      });
+      const data = await res.json();
+      const stream = data.data?.[0];
+      const isLive = !!stream;
+
+      // Detectar cuando acaba de ir en vivo
+      if (isLive && !streamLiveMap[ch]) {
+        streamLiveMap[ch] = true;
+        const client = customClients[ch] || mainClient;
+        const game = stream.game_name || '?';
+        const title = stream.title || '';
+        const customMsg = liveConfig.message || '';
+        let msg;
+        if (customMsg) {
+          msg = customMsg.replace(/\{game\}/g, game).replace(/\{title\}/g, title).replace(/\{channel\}/g, ch);
+        } else {
+          msg = `🔴 ¡@${ch} está en vivo! 🎮 ${game}${title ? ` — ${title}` : ''} 🕷️👑`;
+        }
+        client.say(`#${ch}`, msg);
+      } else if (!isLive) {
+        streamLiveMap[ch] = false;
+      }
+    }
+  } catch(e) {}
+}
+
+async function getTwitchAppToken() {
+  const res = await fetch(`https://id.twitch.tv/oauth2/token?client_id=${process.env.TWITCH_CLIENT_ID}&client_secret=${process.env.TWITCH_CLIENT_SECRET}&grant_type=client_credentials`, { method: 'POST' });
+  const data = await res.json();
+  return data.access_token;
+}
