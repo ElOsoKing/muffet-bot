@@ -469,7 +469,8 @@ async function handleMessage(client, channel, tags, message, self) {
     const isCommand = message.trim().startsWith('!');
 
     if (!isViewbot && !isCommand && !muffetSilentMap[channelName]) {
-      const isBroadcaster = tags.badges?.broadcaster === '1' || username.toLowerCase() === channelName.toLowerCase();
+      // No saludar al broadcaster en su propio canal
+      const isBroadcaster = username.toLowerCase() === channelName.toLowerCase();
       if (!isBroadcaster) {
         setTimeout(async () => {
           try {
