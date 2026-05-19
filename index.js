@@ -1173,6 +1173,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       ['sorteo', '!sorteo'], ['random', '!random'], ['ask', '!ask'],
       ['chiste', '!chiste'], ['bola8', '!8ball'], ['poll', '!poll'], ['cancion', '!cancion'],
       ['primerin', '!' + (channelConfigs[channelName]?.primerin_config?.command || 'primerin')],
+      ['primerin', '!toprimerin'],
     ].filter(([id]) => sys[id] !== false).map(([, cmd]) => cmd);
 
     // Comandos personalizados
@@ -1405,6 +1406,18 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     } else {
       client.say(channel, `@${username} No hay redes configuradas aún~ 🕷️`);
     }
+    return;
+  }
+
+  // ── !toprimerin ──
+  if (firstWord === '!toprimerin') {
+    if (!isSysCmdEnabled(channelName, 'primerin')) return;
+    const ranking = Object.entries(config.primerin_config?.ranking || {})
+      .sort(([,a],[,b]) => b-a).slice(0,5);
+    if (!ranking.length) { client.say(channel, '🥇 Nadie ha ganado el primerin aún~ 🕷️'); return; }
+    const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+    const list = ranking.map(([user, wins], i) => `${medals[i]} ${user} (${wins}x)`).join(' | ');
+    client.say(channel, `🏆 Top Primerin: ${list} 🕷️`);
     return;
   }
 
