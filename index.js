@@ -1448,9 +1448,17 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     }).catch(() => {});
 
     const wins = ranking[username.toLowerCase()];
-    const msg = await getMuffetResponse(channelName,
-      `¡@${username} llegó primero al stream hoy! Lleva ${wins} vez${wins>1?'es':''} siendo el primero. Anúncialo emocionado con tu personalidad.`,
-      username);
+    const customMsg = pConfig.message || '';
+    let msg;
+    if (customMsg) {
+      msg = customMsg
+        .replace(/\{user\}/g, `@${username}`)
+        .replace(/\{wins\}/g, wins);
+    } else {
+      msg = await getMuffetResponse(channelName,
+        `¡@${username} llegó primero al stream hoy! Lleva ${wins} vez${wins>1?'es':''} siendo el primero. Anúncialo emocionado con tu personalidad.`,
+        username);
+    }
     client.say(channel, msg);
     return;
   }
