@@ -382,7 +382,11 @@ async function handleMessage(client, channel, tags, message, self) {
   if (isKnownBot(tags, tags.username || '')) return;
 
   const channelName = channel.replace('#', '').toLowerCase();
-  const config = channelConfigs[channelName] || defaultConfig(channelName);
+
+  // Solo responder en canales registrados en MuffetBot
+  if (!channelConfigs[channelName]) return;
+
+  const config = channelConfigs[channelName];
   const username = tags['display-name'] || tags.username;
   const msgLower = message.trim().toLowerCase();
   const firstWord = msgLower.split(' ')[0];
