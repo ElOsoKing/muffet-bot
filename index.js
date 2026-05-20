@@ -1709,9 +1709,17 @@ async function start() {
   // Auto mensajes por canal con timer individual por mensaje
   const autoMsgIntervals = {};
 
+  const autoMsgSignatures = {}; // { ch: 'json de auto_messages' } para detectar cambios
+
   function scheduleAutoMessages() {
     for (const [ch, config] of Object.entries(channelConfigs)) {
-      // Limpiar timers existentes — así si borraron mensajes se detienen
+      const signature = JSON.stringify(config.auto_messages || []);
+
+      // Solo recrear timers si la config cambió
+      if (autoMsgSignatures[ch] === signature) continue;
+      autoMsgSignatures[ch] = signature;
+
+      // Limpiar timers anteriores
       if (autoMsgIntervals[ch]?.length) {
         autoMsgIntervals[ch].forEach(t => clearInterval(t));
       }
@@ -1727,7 +1735,7 @@ async function start() {
 
         const timer = setInterval(async () => {
           if (muffetActiveMap[ch] === false) return;
-          if (muffetSilentMap[ch]) return; // Modo silencio — no enviar auto mensajes
+          if (muffetSilentMap[ch]) return;
           const lastActivity = lastChatActivity[ch];
           if (lastActivity && Date.now() - lastActivity > 10 * 60 * 1000) return;
           if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
