@@ -199,7 +199,24 @@ async function resolveVariables(text, channelName, username, touser) {
     });
   }
 
-  // Variables que requieren llamada a la API de Twitch
+  // Variable {randomuser} — viewer aleatorio del historial del chat
+  if (result.includes('{randomuser}')) {
+    const viewers = Array.from(chatHistory[channelName]?.map(h => h.content?.split(':')[0]).filter(Boolean) || []);
+    const uniqueViewers = [...new Set(viewers)].filter(v => v !== username && v !== TWITCH_BOT_USERNAME?.toLowerCase());
+    const randomViewer = uniqueViewers.length > 0
+      ? uniqueViewers[Math.floor(Math.random() * uniqueViewers.length)]
+      : 'alguien';
+    result = result.replace(/\{randomuser\}/g, randomViewer);
+  }
+
+  // Variable {randomlist[op1;op2;op3]} — elige una opción aleatoria
+  if (result.includes('{randomlist[')) {
+    result = result.replace(/\{randomlist\[([^\]]+)\]\}/g, (match, list) => {
+      const options = list.split(';').map(o => o.trim()).filter(Boolean);
+      if (!options.length) return match;
+      return options[Math.floor(Math.random() * options.length)];
+    });
+  }
   if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}')) {
     try {
       // Buscar el access token del canal
