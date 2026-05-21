@@ -1506,8 +1506,8 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     setUserCooldown(channelName, `chiste_${username}`);
     const tema = message.trim().slice(firstWord.length).trim();
     const prompt = tema
-      ? `Cuenta un chiste corto y gracioso sobre "${tema}" con tu personalidad. Máximo 2 oraciones.`
-      : `Cuenta un chiste corto y gracioso con tu personalidad. Máximo 2 oraciones.`;
+      ? `Cuenta un chiste corto, coherente y gracioso sobre "${tema}". El chiste debe tener una estructura clara: pregunta y respuesta, o una situación con remate. Debe ser entendible y tener sentido. Solo el chiste, sin introducción. Máximo 3 oraciones.`
+      : `Cuenta un chiste corto, coherente y gracioso. El chiste debe tener una estructura clara: pregunta y respuesta, o una situación con remate. Debe ser entendible y tener sentido. Solo el chiste, sin introducción. Máximo 3 oraciones.`;
     const response = await getMuffetResponse(channelName, prompt, username);
     botSay(client, channel, response);
     return;
