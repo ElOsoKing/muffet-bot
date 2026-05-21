@@ -22,6 +22,7 @@ let channelConfigs = {}; // { 'elosoking1': { bot_prompt, commands, ... } }
 let muffetActiveMap = {}; // { 'elosoking1': true/false }
 let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let greetedMap = {}; // { 'elosoking1': Set() }
+const chatViewers = {}; // { 'elosoking1': Set() } — viewers que han escrito en el chat
 
 const defaultConfig = (username) => ({
   bot_prompt: `Eres Muffet, la araña de Undertale. Eres la consejera del canal de ${username}. Los viewers son "súbditos" o "dearies". Hablas en español, eres coqueta y misteriosa. Usas emojis 🕷️ 👑 ♥. Respuestas cortas (máximo 2 oraciones).`,
@@ -199,12 +200,12 @@ async function resolveVariables(text, channelName, username, touser) {
     });
   }
 
-  // Variable {randomuser} — viewer aleatorio del historial del chat
+  // Variable {randomuser} — viewer aleatorio del chat
   if (result.includes('{randomuser}')) {
-    const viewers = Array.from(chatHistory[channelName]?.map(h => h.content?.split(':')[0]).filter(Boolean) || []);
-    const uniqueViewers = [...new Set(viewers)].filter(v => v !== username && v !== TWITCH_BOT_USERNAME?.toLowerCase());
-    const randomViewer = uniqueViewers.length > 0
-      ? uniqueViewers[Math.floor(Math.random() * uniqueViewers.length)]
+    const viewers = Array.from(chatViewers[channelName] || [])
+      .filter(v => v !== username.toLowerCase() && v !== TWITCH_BOT_USERNAME?.toLowerCase());
+    const randomViewer = viewers.length > 0
+      ? viewers[Math.floor(Math.random() * viewers.length)]
       : 'alguien';
     result = result.replace(/\{randomuser\}/g, randomViewer);
   }
@@ -415,6 +416,10 @@ async function handleMessage(client, channel, tags, message, self) {
 
   // Ignorar al bot
   if (username.toLowerCase() === botName) return;
+
+  // Registrar viewer activo para {randomuser}
+  if (!chatViewers[channelName]) chatViewers[channelName] = new Set();
+  chatViewers[channelName].add(username.toLowerCase());
 
   // ── Comandos de control (solo mods) ──
   if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
