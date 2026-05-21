@@ -477,21 +477,19 @@ async function handleMessage(client, channel, tags, message, self) {
   if (!greetedMap[channelName].has(username.toLowerCase())) {
     greetedMap[channelName].add(username.toLowerCase());
 
-    // No saludar si el primer mensaje es un comando o viewbot
-    const isViewbot = /https?:\/\//i.test(message) ||
-      /buy\s*(followers|viewers|views|subs)/i.test(message) ||
-      /get\s*(views|viewers|followers)/i.test(message) ||
-      /increase.*viewers/i.test(message) ||
-      /cheap.*follow/i.test(message) ||
-      /t\.me\//i.test(message) ||
-      /bit\.ly\//i.test(message);
-    const isCommand = message.trim().startsWith('!');
-
-    if (!isViewbot && !isCommand && !muffetSilentMap[channelName]) {
-      // No saludar al broadcaster en su propio canal
+    if (muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName]) {
+      const isViewbot = /https?:\/\//i.test(message) ||
+        /buy\s*(followers|viewers|views|subs)/i.test(message) ||
+        /get\s*(views|viewers|followers)/i.test(message) ||
+        /increase.*viewers/i.test(message) ||
+        /cheap.*follow/i.test(message) ||
+        /t\.me\//i.test(message) ||
+        /bit\.ly\//i.test(message);
+      const isCommand = message.trim().startsWith('!');
       const isBroadcaster = (tags.username || '').toLowerCase() === channelName.toLowerCase() ||
                             tags.badges?.broadcaster === '1';
-      if (!isBroadcaster) {
+
+      if (!isViewbot && !isCommand && !isBroadcaster) {
         setTimeout(async () => {
           try {
             const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
