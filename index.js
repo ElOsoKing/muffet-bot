@@ -883,6 +883,9 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
   const pointsEnabled = pointsConfig.enabled !== false;
 
   if (pointsEnabled && !self) {
+    // No dar XP al broadcaster en su propio canal
+    const isBroadcasterXP = (tags.username || '').toLowerCase() === channelName.toLowerCase() || tags.badges?.broadcaster === '1';
+    if (!isBroadcasterXP) {
     // Dar XP por mensaje
     const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
     const isVIP = !!tags.badges?.vip;
@@ -920,6 +923,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
         } catch(e) {}
       }, 60000);
     }
+    } // fin isBroadcasterXP
   }
 
   // ── Comandos de puntos ──
