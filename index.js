@@ -1200,7 +1200,7 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
     const sysActive = [
       ['game', '!game'], ['titulo', '!titulo'], ['uptime', '!uptime'],
       ['clip', '!clip'], ['redes', '!redes'], ['puntos', '!puntos'],
-      ['top', '!top'], ['apostar', '!apostar'], ['canjear', '!canjear'],
+      ['top', '!top'], ['apostar', '!apostar'], ['canjear', '!canjear'], ['duelo', '!duelo'],
       ['sorteo', '!sorteo'], ['random', '!random'], ['ask', '!ask'],
       ['chiste', '!chiste'], ['bola8', '!8ball'], ['poll', '!poll'], ['cancion', '!cancion'],
       ['primerin', '!' + (channelConfigs[channelName]?.primerin_config?.command || 'primerin')],
@@ -1484,6 +1484,61 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
         username);
     }
     client.say(channel, msg);
+    return;
+  }
+
+  // ── !duelo ──
+  if (firstWord === '!duelo' || firstWord === '!duel') {
+    if (!isSysCmdEnabled(channelName, 'duelo')) return;
+    const pointsConfig = config.points_config || {};
+    if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
+
+    const parts = message.trim().split(' ');
+    const target = parts[1]?.replace('@','').toLowerCase();
+    const amount = parseInt(parts[2]);
+    const emoji = pointsConfig.emoji || '🏆';
+    const name = pointsConfig.name || 'puntos';
+
+    if (!target || !amount || amount < 1) {
+      client.say(channel, `@${username} Uso: !duelo @usuario cantidad — Ej: !duelo @wolf 100 🕷️`);
+      return;
+    }
+    if (target === username.toLowerCase()) {
+      client.say(channel, `@${username} ¡No puedes retarte a ti mismo, dearie! 🕷️`);
+      return;
+    }
+
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const challengerPoints = viewerPoints[username.toLowerCase()] || 0;
+    const targetPoints = viewerPoints[target] || 0;
+
+    if (challengerPoints < amount) {
+      client.say(channel, `@${username} No tienes suficientes ${name}! Tienes ${challengerPoints} ${emoji} 🕷️`);
+      return;
+    }
+    if (targetPoints < amount) {
+      client.say(channel, `@${username} @${target} no tiene suficientes ${name} para el duelo~ 🕷️`);
+      return;
+    }
+
+    // Duelo — 50/50
+    const challengerWins = Math.random() < 0.5;
+    const winner = challengerWins ? username : target;
+    const loser = challengerWins ? target : username;
+
+    viewerPoints[winner.toLowerCase()] = (viewerPoints[winner.toLowerCase()] || 0) + amount;
+    viewerPoints[loser.toLowerCase()] = Math.max(0, (viewerPoints[loser.toLowerCase()] || 0) - amount);
+    channelConfigs[channelName].viewer_points = viewerPoints;
+
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ viewer_points: viewerPoints })
+    }).catch(() => {});
+
+    const prompt = `¡Duelo de puntos! @${username} retó a @${target} por ${amount} ${name}. ¡Ganó @${winner}! Anúncialo emocionado con tu personalidad en máximo 2 oraciones.`;
+    const msg = await getMuffetResponse(channelName, prompt, username);
+    client.say(channel, `⚔️ ${msg}`);
     return;
   }
 
