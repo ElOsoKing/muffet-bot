@@ -648,41 +648,54 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
       }
 
       // !cancion nombre — buscar y agregar
-      // Detectar formato "cancion - artista" para búsqueda más precisa
-      let searchQuery = query;
-      let fallbackQuery = query;
-      if (query.includes(' - ')) {
-        const parts = query.split(' - ');
-        const trackName = parts[0].trim();
-        const artistName = parts.slice(1).join(' - ').trim();
-        searchQuery = `track:${trackName} artist:${artistName}`;
-        fallbackQuery = `${trackName} ${artistName}`;
-      }
+      // Detectar si es un link de Spotify
+      const spotifyLinkMatch = query.match(/open\.spotify\.com\/track\/([a-zA-Z0-9]+)/);
+      let track;
 
-      // Buscar con query principal, si no hay resultados usar fallback sin filtros
-      let tracks = [];
-      const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=5&market=ES`,
-        { headers: { 'Authorization': `Bearer ${token}` } });
-      const searchData = await searchRes.json();
-      tracks = searchData.tracks?.items || [];
-
-      // Si no hay resultados o búsqueda avanzada falló, intentar búsqueda simple
-      if (!tracks.length && searchQuery !== fallbackQuery) {
-        const fallRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(fallbackQuery)}&type=track&limit=5&market=ES`,
+      if (spotifyLinkMatch) {
+        // Es un link — obtener el track directamente por ID
+        const trackId = spotifyLinkMatch[1];
+        const trackRes = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`,
           { headers: { 'Authorization': `Bearer ${token}` } });
-        const fallData = await fallRes.json();
-        tracks = fallData.tracks?.items || [];
+        if (!trackRes.ok) { client.say(channel, `@${username} No pude obtener esa canción~ 🎵`); return; }
+        track = await trackRes.json();
+      } else {
+        // Detectar formato "cancion - artista" para búsqueda más precisa
+        let searchQuery = query;
+        let fallbackQuery = query;
+        if (query.includes(' - ')) {
+          const parts = query.split(' - ');
+          const trackName = parts[0].trim();
+          const artistName = parts.slice(1).join(' - ').trim();
+          searchQuery = `track:${trackName} artist:${artistName}`;
+          fallbackQuery = `${trackName} ${artistName}`;
+        }
+
+        // Buscar con query principal, si no hay resultados usar fallback sin filtros
+        let tracks = [];
+        const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=5&market=ES`,
+          { headers: { 'Authorization': `Bearer ${token}` } });
+        const searchData = await searchRes.json();
+        tracks = searchData.tracks?.items || [];
+
+        // Si no hay resultados o búsqueda avanzada falló, intentar búsqueda simple
+        if (!tracks.length && searchQuery !== fallbackQuery) {
+          const fallRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(fallbackQuery)}&type=track&limit=5&market=ES`,
+            { headers: { 'Authorization': `Bearer ${token}` } });
+          const fallData = await fallRes.json();
+          tracks = fallData.tracks?.items || [];
+        }
+
+        if (!tracks.length) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
+
+        // Elegir el mejor resultado comparando con la búsqueda original
+        const queryLower = query.toLowerCase().replace(' - ', ' ');
+        track = tracks.reduce((best, t) => {
+          const combined = `${t.name} ${t.artists[0].name}`.toLowerCase();
+          const score = queryLower.split(' ').filter(w => w.length > 1 && combined.includes(w)).length;
+          return score > (best._score || 0) ? { ...t, _score: score } : best;
+        }, { ...tracks[0], _score: 0 });
       }
-
-      if (!tracks.length) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
-
-      // Elegir el mejor resultado comparando con la búsqueda original
-      const queryLower = query.toLowerCase().replace(' - ', ' ');
-      const track = tracks.reduce((best, t) => {
-        const combined = `${t.name} ${t.artists[0].name}`.toLowerCase();
-        const score = queryLower.split(' ').filter(w => w.length > 1 && combined.includes(w)).length;
-        return score > (best._score || 0) ? { ...t, _score: score } : best;
-      }, { ...tracks[0], _score: 0 });
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
