@@ -578,6 +578,7 @@ async function getSpotifyToken(channelName) {
 
   // ── Spotify ──
 const spotifyQueueCount = {}; // { channelName: { username: count } }
+const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 
   if (firstWord === '!cola' || firstWord === '!queue') {
     try {
@@ -698,16 +699,44 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
         }, { ...tracks[0], _score: 0 });
       }
 
+      // Verificar blacklist
+      const blacklist = spotifyConfig.blacklist || [];
+      const trackNameLower = track.name.toLowerCase();
+      const artistNameLower = track.artists[0].name.toLowerCase();
+      const isBlocked = blacklist.some(b => {
+        const bl = b.toLowerCase();
+        return trackNameLower.includes(bl) || artistNameLower.includes(bl);
+      });
+      if (isBlocked) {
+        client.say(channel, `@${username} Esa canción o artista está en la lista negra~ 🕷️`);
+        return;
+      }
+
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (queueRes.status === 204 || queueRes.status === 200) {
-        // Actualizar conteo del usuario
         spotifyQueueCount[chKey][userKey] = userCount + 1;
         const remaining = maxPerUser - (userCount + 1);
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
+
+        // Guardar en historial
+        try {
+          const histRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+            { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+          const histData = await histRes.json();
+          const spotifyConfig = histData?.[0]?.spotify_config || {};
+          const history = spotifyConfig.history || [];
+          history.unshift({ name: track.name, artist: track.artists[0].name, image: track.album?.images?.[1]?.url || '', requester: username.toLowerCase(), requestedAt: new Date().toISOString() });
+          if (history.length > 20) history.pop(); // Max 20 entradas
+          await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+            method: 'PATCH',
+            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spotify_config: { ...spotifyConfig, history } })
+          });
+        } catch(e) {}
       } else {
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
@@ -724,8 +753,34 @@ const spotifyQueueCount = {}; // { channelName: { username: count } }
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      skipVotes[channelName] = new Set(); // Resetear votos al saltar
       client.say(channel, `⏭️ Canción saltada~ 🎵`);
     } catch(e) {}
+    return;
+  }
+
+  // ── !vskip — votar para saltar canción ──
+  if (firstWord === '!vskip') {
+    if (!isSysCmdEnabled(channelName, 'cancion')) return;
+    const spotConfig = channelConfigs[channelName]?.spotify_config || {};
+    const votesNeeded = spotConfig.skip_votes || 5;
+    if (!skipVotes[channelName]) skipVotes[channelName] = new Set();
+    if (skipVotes[channelName].has(username.toLowerCase())) {
+      client.say(channel, `@${username} Ya votaste para saltar~ 🎵`);
+      return;
+    }
+    skipVotes[channelName].add(username.toLowerCase());
+    const votes = skipVotes[channelName].size;
+    if (votes >= votesNeeded) {
+      skipVotes[channelName] = new Set();
+      const token = await getSpotifyToken(channelName);
+      if (token) {
+        await fetch('https://api.spotify.com/v1/me/player/next', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
+        client.say(channel, `⏭️ ¡El chat votó para saltar! ${votes}/${votesNeeded} votos~ 🎵`);
+      }
+    } else {
+      client.say(channel, `⏭️ @${username} votó para saltar (${votes}/${votesNeeded})~ 🎵`);
+    }
     return;
   }
 
