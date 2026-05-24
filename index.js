@@ -527,6 +527,7 @@ async function handleMessage(client, channel, tags, message, self) {
     const isVIP = !!tags.badges?.vip;
     const modCfg = config.mod_config || {};
     const warnMsg = config.warn_message || '⚠️ Cuidado, dearie~ 🕷️';
+    console.log(`[MOD] ${channelName} | user:${username} | mod:${isModOrBroadcaster} | words:${config.banned_words?.length} | modCfg:${JSON.stringify(modCfg)}`);
 
     if (!isModOrBroadcaster) {
 
