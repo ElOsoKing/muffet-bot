@@ -59,6 +59,7 @@ async function loadAllChannels() {
         auto_message_interval: s.auto_message_interval || 20,
         ai_enabled:    s.ai_enabled    !== undefined ? s.ai_enabled  : true,
         mod_enabled:   s.mod_enabled   !== undefined ? s.mod_enabled : false,
+        mod_config:    s.mod_config    || {},
         banned_words:  s.banned_words  || [],
         warn_message:  s.warn_message  || '⚠️ Cuidado, dearie~ 🕷️',
         plan:          s.plan          || 'free',
@@ -524,18 +525,75 @@ async function handleMessage(client, channel, tags, message, self) {
     const isModOrBroadcaster = isMod(tags, channelName);
     const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
     const isVIP = !!tags.badges?.vip;
+    const modCfg = config.mod_config || {};
+    const warnMsg = config.warn_message || '⚠️ Cuidado, dearie~ 🕷️';
 
     if (!isModOrBroadcaster) {
-      if (config.banned_words?.length > 0) {
-        if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
-          client.say(channel, `@${username} ${config.warn_message}`);
+
+      // ── Modo lento ──
+      if (modCfg.slow_mode && modCfg.slow_seconds > 0) {
+        if (!slowModeTracker[channelName]) slowModeTracker[channelName] = {};
+        const lastTime = slowModeTracker[channelName][username.toLowerCase()] || 0;
+        const elapsed = (Date.now() - lastTime) / 1000;
+        if (elapsed < modCfg.slow_seconds) {
+          client.deletemessage(channel, tags.id).catch(() => {});
+          return;
+        }
+        slowModeTracker[channelName][username.toLowerCase()] = Date.now();
+      }
+
+      // ── Bloqueo de links ──
+      if (modCfg.block_links) {
+        const linkRegex = /https?:\/\/|www\.|\.com|\.net|\.org|\.gg|\.tv|\.io|\.ly/i;
+        if (linkRegex.test(message)) {
+          const whitelist = modCfg.link_whitelist || [];
+          const isWhitelisted = whitelist.some(domain => message.toLowerCase().includes(domain.toLowerCase()));
+          if (!isWhitelisted && !isSub && !isVIP) {
+            client.deletemessage(channel, tags.id).catch(() => {});
+            client.say(channel, `@${username} Los links no están permitidos~ 🕷️`);
+            if (modCfg.timeout_links) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Link no permitido').catch(() => {});
+            return;
+          }
+        }
+      }
+
+      // ── Anti-spam (mensajes repetidos) ──
+      if (modCfg.anti_spam) {
+        if (!spamTracker[channelName]) spamTracker[channelName] = {};
+        if (!spamTracker[channelName][username.toLowerCase()]) spamTracker[channelName][username.toLowerCase()] = { msgs: [], lastMsg: '' };
+        const tracker = spamTracker[channelName][username.toLowerCase()];
+        const now = Date.now();
+        tracker.msgs = tracker.msgs.filter(t => now - t < 10000); // últimos 10s
+        tracker.msgs.push(now);
+        const isRepeat = msgLower === tracker.lastMsg;
+        tracker.lastMsg = msgLower;
+        const maxMsgs = modCfg.spam_max_msgs || 5;
+        if (tracker.msgs.length > maxMsgs || (isRepeat && tracker.msgs.length > 2)) {
+          client.deletemessage(channel, tags.id).catch(() => {});
+          client.say(channel, `@${username} ¡No hagas spam, dearie~ 🕷️`);
+          if (modCfg.timeout_spam) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Spam detectado').catch(() => {});
+          tracker.msgs = [];
           return;
         }
       }
-      if (!isSub && !isVIP) {
+
+      // ── Palabras prohibidas ──
+      if (config.banned_words?.length > 0) {
+        if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
+          client.deletemessage(channel, tags.id).catch(() => {});
+          client.say(channel, `@${username} ${warnMsg}`);
+          if (modCfg.timeout_banned) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Palabra prohibida').catch(() => {});
+          return;
+        }
+      }
+
+      // ── Moderación con IA (solo Pro) ──
+      if (modCfg.ai_mod && isPro(channelName) && !isSub && !isVIP) {
         const check = await checkMessageWithAI(message);
         if (check.flagged) {
-          client.say(channel, `@${username} ${config.warn_message}`);
+          client.deletemessage(channel, tags.id).catch(() => {});
+          client.say(channel, `@${username} ${warnMsg}`);
+          if (modCfg.timeout_ai) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Moderación IA').catch(() => {});
           return;
         }
       }
@@ -587,6 +645,8 @@ async function getSpotifyToken(channelName) {
   // ── Spotify ──
 const spotifyQueueCount = {}; // { channelName: { username: count } }
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
+const spamTracker = {}; // { channelName: { username: { msgs: [], lastMsg: '' } } }
+const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
   if (firstWord === '!cola' || firstWord === '!queue') {
     try {
