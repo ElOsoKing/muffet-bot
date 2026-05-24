@@ -319,6 +319,14 @@ function isSysCmdEnabled(channelName, cmdId) {
   return sys[cmdId] !== false; // activo por defecto
 }
 
+function isPro(channelName) {
+  return channelConfigs[channelName]?.plan === 'pro';
+}
+
+function proOnly(client, channel, username) {
+  client.say(channel, `@${username} Este comando es exclusivo del plan Pro~ Visita ko-fi.com/muffetbot para más info 🕷️⭐`);
+}
+
 // ── Bots conocidos a ignorar ──
 const KNOWN_BOTS = new Set([
   'streamelements','nightbot','fossabot','moobot','streamlabs','wizebot',
@@ -599,6 +607,7 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 
   if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
     if (!isSysCmdEnabled(channelName, 'cancion')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -746,6 +755,7 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 
   if (firstWord === '!skip') {
     if (!isMod(tags, channelName)) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     try {
       const token = await getSpotifyToken(channelName);
       if (!token) return;
@@ -762,6 +772,7 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
   // ── !vskip — votar para saltar canción ──
   if (firstWord === '!vskip') {
     if (!isSysCmdEnabled(channelName, 'cancion')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     const spotConfig = channelConfigs[channelName]?.spotify_config || {};
     const votesNeeded = spotConfig.skip_votes || 5;
     if (!skipVotes[channelName]) skipVotes[channelName] = new Set();
@@ -1288,6 +1299,7 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
   // Uso: !poll ¿Qué jugamos? Minecraft Fortnite Valorant
   if (firstWord === '!poll' || firstWord === '!encuesta') {
     if (!isSysCmdEnabled(channelName, 'poll')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     if (!isMod(tags, channelName)) return;
     const parts = message.trim().slice(firstWord.length).trim().split('?');
     if (parts.length < 2) { client.say(channel, `@${username} Uso: !poll ¿Pregunta? Opcion1 Opcion2 Opcion3 🕷️`); return; }
@@ -1496,14 +1508,20 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
   // ── !redes automático ──
   if (firstWord === '!redes') {
     if (!isSysCmdEnabled(channelName, 'redes')) return;
-    const BASE = process.env.BASE_URL || 'https://muffet-dashboard.onrender.com';
-    client.say(channel, `🌐 Encuentra todas las redes de ${channelName} aquí: ${BASE}/canal/${channelName} 🕷️♥`);
+    if (isPro(channelName)) {
+      const BASE = process.env.BASE_URL || 'https://muffet-dashboard.onrender.com';
+      client.say(channel, `🌐 Encuentra todas las redes de ${channelName} aquí: ${BASE}/canal/${channelName} 🕷️♥`);
+    } else {
+      const socials = formatSocials(config?.social_links || {});
+      client.say(channel, socials ? `🌐 Redes de ${channelName}: ${socials} 🕷️♥` : `@${username} No hay redes configuradas aún~ 🕷️`);
+    }
     return;
   }
 
   // ── !toprimerin ──
   if (firstWord === '!toprimerin') {
     if (!isSysCmdEnabled(channelName, 'primerin')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     const ranking = Object.entries(config.primerin_config?.ranking || {})
       .sort(([,a],[,b]) => b-a).slice(0,5);
     if (!ranking.length) { client.say(channel, '🥇 Nadie ha ganado el primerin aún~ 🕷️'); return; }
@@ -1518,6 +1536,7 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
   const pCmd = '!' + (pConfig.command || 'primerin').toLowerCase();
   if (firstWord.toLowerCase() === pCmd) {
     if (!isSysCmdEnabled(channelName, 'primerin')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     const today = new Date().toISOString().split('T')[0];
     const usedToday = pConfig.used_today || {};
 
@@ -1559,6 +1578,7 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
   // ── !duelo ──
   if (firstWord === '!duelo' || firstWord === '!duel') {
     if (!isSysCmdEnabled(channelName, 'duelo')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     const pointsConfig = config.points_config || {};
     if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
 
@@ -2133,6 +2153,7 @@ async function checkStreamsLive() {
       const ch = s.twitch_username?.toLowerCase();
       const liveConfig = s.live_announcement || {};
       if (!liveConfig.enabled || !s.access_token) continue;
+      if (s.plan !== 'pro') continue; // Solo Pro
 
       try {
         const streamRes = await fetch(`https://api.twitch.tv/helix/streams?user_login=${ch}`, {
