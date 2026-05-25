@@ -325,7 +325,7 @@ function isPro(channelName) {
 }
 
 function proOnly(client, channel, username) {
-  client.say(channel, `@${username} Este comando es exclusivo del plan Pro~ Visita ko-fi.com/muffetbot para más info 🕷️⭐`);
+  client.say(channel, `@${username} Este comando es exclusivo del plan Pro~ Visita muffet-dashboard.onrender.com/plans para más info 🕷️⭐`);
 }
 
 // ── Bots conocidos a ignorar ──
