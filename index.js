@@ -1989,6 +1989,28 @@ async function setupCustomBots() {
 // ══════════════════════════════════════════
 //  ARRANQUE PRINCIPAL
 // ══════════════════════════════════════════
+// ── CHECK PLANES EXPIRADOS — cada 6 horas ──
+async function checkExpiredPlans() {
+  try {
+    const now = new Date().toISOString();
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?plan=eq.pro&plan_expires_at=lt.${now}&select=twitch_username,twitch_id`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const expired = await res.json();
+    if (!Array.isArray(expired) || !expired.length) return;
+    for (const s of expired) {
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_id=eq.${s.twitch_id}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: 'free', plan_expires_at: null, lemon_subscription_id: null })
+      });
+      console.log(`[Plans] ❌ Plan expirado y desactivado para ${s.twitch_username}`);
+    }
+  } catch(e) { console.error('[Plans] Error checking expired:', e.message); }
+}
+
+setInterval(checkExpiredPlans, 6 * 60 * 60 * 1000); // cada 6 horas
+checkExpiredPlans(); // al iniciar
+
 async function start() {
   console.log('🐻🕷️ MuffetBot Multi-Canal iniciando...');
 
