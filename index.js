@@ -220,6 +220,47 @@ async function resolveVariables(text, channelName, username, touser) {
       return options[Math.floor(Math.random() * options.length)];
     });
   }
+  // Variable {game:usuario} — juego que está jugando otro canal
+  if (result.includes('{game:')) {
+    const matches = [...result.matchAll(/\{game:([^}]+)\}/g)];
+    for (const match of matches) {
+      const targetUser = match[1].toLowerCase().replace('@','');
+      try {
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+        );
+        const data = await res.json();
+        const token = data?.[0]?.access_token;
+        if (token) {
+          // Intentar stream activo primero
+          const streamRes = await fetch(
+            `https://api.twitch.tv/helix/streams?user_login=${targetUser}`,
+            { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
+          );
+          const streamData = await streamRes.json();
+          const stream = streamData?.data?.[0];
+          if (stream?.game_name) {
+            result = result.replace(match[0], stream.game_name);
+          } else {
+            // Si no está en vivo, buscar último juego del canal
+            const channelRes = await fetch(
+              `https://api.twitch.tv/helix/channels?broadcaster_id=${stream?.user_id || ''}&user_login=${targetUser}`,
+              { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
+            );
+            const channelData = await channelRes.json();
+            const game = channelData?.data?.[0]?.game_name;
+            result = result.replace(match[0], game || 'un juego');
+          }
+        } else {
+          result = result.replace(match[0], 'un juego');
+        }
+      } catch(e) {
+        result = result.replace(match[0], 'un juego');
+      }
+    }
+  }
+
   if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}')) {
     try {
       // Buscar el access token del canal
@@ -646,6 +687,11 @@ async function getSpotifyToken(channelName) {
   // ── Spotify ──
 const spotifyQueueCount = {}; // { channelName: { username: count } }
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
+
+// Resetear contadores de canciones cada 20 minutos
+setInterval(() => {
+  for (const ch in spotifyQueueCount) spotifyQueueCount[ch] = {};
+}, 20 * 60 * 1000);
 const spamTracker = {}; // { channelName: { username: { msgs: [], lastMsg: '' } } }
 const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
