@@ -168,6 +168,29 @@ function formatSocials(social_links) {
 }
 
 // ── Resolver variables dinámicas ──
+// ── TWITCH APP TOKEN ──
+let twitchAppToken = null;
+let twitchAppTokenExpiry = 0;
+
+async function getTwitchAppToken() {
+  if (twitchAppToken && Date.now() < twitchAppTokenExpiry) return twitchAppToken;
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `client_id=${process.env.TWITCH_CLIENT_ID}&client_secret=${process.env.TWITCH_CLIENT_SECRET}&grant_type=client_credentials`
+    });
+    const data = await res.json();
+    twitchAppToken = data.access_token;
+    twitchAppTokenExpiry = Date.now() + (data.expires_in - 300) * 1000;
+    console.log('[Twitch] App token obtenido ✅');
+    return twitchAppToken;
+  } catch(e) {
+    console.error('[Twitch] Error obteniendo app token:', e.message);
+    return null;
+  }
+}
+
 async function resolveVariables(text, channelName, username, touser) {
   let result = text;
   result = result.replace(/\{user\}/g, username);
@@ -228,14 +251,8 @@ async function resolveVariables(text, channelName, username, touser) {
     for (const match of matches) {
       const targetUser = match[1].toLowerCase().replace('@','').trim();
       try {
-        const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-        );
-        const data = await res.json();
-        const token = data?.[0]?.access_token;
+        const token = await getTwitchAppToken();
         if (token) {
-          // Buscar info del canal (funciona en vivo y offline)
           const channelRes = await fetch(
             `https://api.twitch.tv/helix/channels?broadcaster_login=${targetUser}`,
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
@@ -243,19 +260,8 @@ async function resolveVariables(text, channelName, username, touser) {
           const channelData = await channelRes.json();
           const channelInfo = channelData?.data?.[0];
           const game = channelInfo?.game_name;
-          console.log(`[game:${targetUser}] channelInfo:`, JSON.stringify(channelInfo)?.slice(0,200));
+          console.log(`[game:${targetUser}] game: ${game}`);
           result = result.replace(match[0], game || 'un juego');
-
-          // Si está en vivo usar el juego del stream (más actualizado)
-          if (channelInfo?.broadcaster_id) {
-            const streamRes = await fetch(
-              `https://api.twitch.tv/helix/streams?user_login=${targetUser}`,
-              { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
-            );
-            const streamData = await streamRes.json();
-            const liveGame = streamData?.data?.[0]?.game_name;
-            if (liveGame) result = result.replace(game || 'un juego', liveGame);
-          }
         } else {
           result = result.replace(match[0], 'un juego');
         }
