@@ -249,31 +249,27 @@ async function resolveVariables(text, channelName, username, touser) {
     result = result.replace(/\{game:\{touser\}\}/g, `{game:${touser || username}}`);
     const matches = [...result.matchAll(/\{game:([^}]+)\}/g)];
     for (const match of matches) {
-      const targetUser = match[1].toLowerCase().replace('@','').trim();
+      const targetUser = match[1].toLowerCase().replace('@','').replace(/\s+/g,'').trim();
       try {
         const token = await getTwitchAppToken();
         if (token) {
-          // Primero obtener el user_id del canal
           const userRes = await fetch(
             `https://api.twitch.tv/helix/users?login=${targetUser}`,
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
           );
           const userData2 = await userRes.json();
           const userId = userData2?.data?.[0]?.id;
-
+          let game = 'un juego';
           if (userId) {
             const channelRes = await fetch(
               `https://api.twitch.tv/helix/channels?broadcaster_id=${userId}`,
               { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
             );
             const channelData = await channelRes.json();
-            const channelInfo = channelData?.data?.[0];
-            const game = channelInfo?.game_name;
-            console.log(`[game:${targetUser}] game: ${game}`);
-            result = result.replace(match[0], game || 'Just Chatting');
-          } else {
-            result = result.replace(match[0], 'un juego');
+            game = channelData?.data?.[0]?.game_name || 'un juego';
           }
+          console.log(`[game:${targetUser}] game: ${game}`);
+          result = result.replace(match[0], game);
         } else {
           result = result.replace(match[0], 'un juego');
         }
@@ -590,7 +586,6 @@ async function handleMessage(client, channel, tags, message, self) {
     const isVIP = !!tags.badges?.vip;
     const modCfg = config.mod_config || {};
     const warnMsg = config.warn_message || '⚠️ Cuidado, dearie~ 🕷️';
-    console.log(`[MOD] ${channelName} | user:${username} | mod:${isModOrBroadcaster} | words:${config.banned_words?.length} | modCfg:${JSON.stringify(modCfg)}`);
 
     if (!isModOrBroadcaster) {
 
@@ -1946,8 +1941,8 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
     if (!canUse) return;
 
-    const args = message.trim().split(' ').slice(1);
-    const touser = args[0] ? args[0].replace('@', '') : username;
+    const args = message.trim().split(/\s+/).slice(1).filter(Boolean);
+    const touser = args[0] ? args[0].replace('@', '').trim() : username;
     const resolved = await resolveVariables(response, channelName, username, touser);
     client.say(channel, resolved);
     return;
