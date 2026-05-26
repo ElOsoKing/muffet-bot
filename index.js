@@ -235,24 +235,26 @@ async function resolveVariables(text, channelName, username, touser) {
         const data = await res.json();
         const token = data?.[0]?.access_token;
         if (token) {
-          // Intentar stream activo primero
-          const streamRes = await fetch(
-            `https://api.twitch.tv/helix/streams?user_login=${targetUser}`,
+          // Buscar info del canal (funciona en vivo y offline)
+          const channelRes = await fetch(
+            `https://api.twitch.tv/helix/channels?broadcaster_login=${targetUser}`,
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
           );
-          const streamData = await streamRes.json();
-          const stream = streamData?.data?.[0];
-          if (stream?.game_name) {
-            result = result.replace(match[0], stream.game_name);
-          } else {
-            // Si no está en vivo, buscar info del canal
-            const channelRes = await fetch(
-              `https://api.twitch.tv/helix/channels?broadcaster_login=${targetUser}`,
+          const channelData = await channelRes.json();
+          const channelInfo = channelData?.data?.[0];
+          const game = channelInfo?.game_name;
+          console.log(`[game:${targetUser}] channelInfo:`, JSON.stringify(channelInfo)?.slice(0,200));
+          result = result.replace(match[0], game || 'un juego');
+
+          // Si está en vivo usar el juego del stream (más actualizado)
+          if (channelInfo?.broadcaster_id) {
+            const streamRes = await fetch(
+              `https://api.twitch.tv/helix/streams?user_login=${targetUser}`,
               { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
             );
-            const channelData = await channelRes.json();
-            const game = channelData?.data?.[0]?.game_name;
-            result = result.replace(match[0], game || 'un juego');
+            const streamData = await streamRes.json();
+            const liveGame = streamData?.data?.[0]?.game_name;
+            if (liveGame) result = result.replace(game || 'un juego', liveGame);
           }
         } else {
           result = result.replace(match[0], 'un juego');
