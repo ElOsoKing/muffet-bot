@@ -268,7 +268,6 @@ async function resolveVariables(text, channelName, username, touser) {
             const channelData = await channelRes.json();
             game = channelData?.data?.[0]?.game_name || 'un juego';
           }
-          console.log(`[game:${targetUser}] game: ${game}`);
           result = result.replace(match[0], game);
         } else {
           result = result.replace(match[0], 'un juego');
