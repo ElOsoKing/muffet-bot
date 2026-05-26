@@ -221,10 +221,12 @@ async function resolveVariables(text, channelName, username, touser) {
     });
   }
   // Variable {game:usuario} — juego que está jugando otro canal
+  // Primero resolver {touser} dentro de {game:}
   if (result.includes('{game:')) {
+    result = result.replace(/\{game:\{touser\}\}/g, `{game:${touser || username}}`);
     const matches = [...result.matchAll(/\{game:([^}]+)\}/g)];
     for (const match of matches) {
-      const targetUser = match[1].toLowerCase().replace('@','');
+      const targetUser = match[1].toLowerCase().replace('@','').trim();
       try {
         const res = await fetch(
           `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
@@ -243,9 +245,9 @@ async function resolveVariables(text, channelName, username, touser) {
           if (stream?.game_name) {
             result = result.replace(match[0], stream.game_name);
           } else {
-            // Si no está en vivo, buscar último juego del canal
+            // Si no está en vivo, buscar info del canal
             const channelRes = await fetch(
-              `https://api.twitch.tv/helix/channels?broadcaster_id=${stream?.user_id || ''}&user_login=${targetUser}`,
+              `https://api.twitch.tv/helix/channels?broadcaster_login=${targetUser}`,
               { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
             );
             const channelData = await channelRes.json();
