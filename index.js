@@ -253,16 +253,27 @@ async function resolveVariables(text, channelName, username, touser) {
       try {
         const token = await getTwitchAppToken();
         if (token) {
-          const channelRes = await fetch(
-            `https://api.twitch.tv/helix/channels?broadcaster_login=${targetUser}`,
+          // Primero obtener el user_id del canal
+          const userRes = await fetch(
+            `https://api.twitch.tv/helix/users?login=${targetUser}`,
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
           );
-          const channelData = await channelRes.json();
-          console.log(`[game:${targetUser}] raw:`, JSON.stringify(channelData).slice(0,400));
-          const channelInfo = channelData?.data?.[0];
-          const game = channelInfo?.game_name;
-          console.log(`[game:${targetUser}] game: ${game}`);
-          result = result.replace(match[0], game || 'un juego');
+          const userData2 = await userRes.json();
+          const userId = userData2?.data?.[0]?.id;
+
+          if (userId) {
+            const channelRes = await fetch(
+              `https://api.twitch.tv/helix/channels?broadcaster_id=${userId}`,
+              { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
+            );
+            const channelData = await channelRes.json();
+            const channelInfo = channelData?.data?.[0];
+            const game = channelInfo?.game_name;
+            console.log(`[game:${targetUser}] game: ${game}`);
+            result = result.replace(match[0], game || 'Just Chatting');
+          } else {
+            result = result.replace(match[0], 'un juego');
+          }
         } else {
           result = result.replace(match[0], 'un juego');
         }
