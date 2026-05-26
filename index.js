@@ -258,6 +258,7 @@ async function resolveVariables(text, channelName, username, touser) {
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
           );
           const channelData = await channelRes.json();
+          console.log(`[game:${targetUser}] raw:`, JSON.stringify(channelData).slice(0,400));
           const channelInfo = channelData?.data?.[0];
           const game = channelInfo?.game_name;
           console.log(`[game:${targetUser}] game: ${game}`);
