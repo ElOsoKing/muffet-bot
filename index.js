@@ -1939,6 +1939,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
               username: touser,
               display_name: userData2.data[0].display_name,
               clip_url: clip?.url || null,
+              clip_id: clip?.id || null,
               clip_thumbnail: clip?.thumbnail_url || null,
               clip_title: clip?.title || null,
               game: clip?.game_name || 'un juego',
