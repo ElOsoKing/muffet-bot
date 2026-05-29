@@ -1935,11 +1935,29 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
             const clip = clips.length ? clips[Math.floor(Math.random() * clips.length)] : null;
 
+            // Obtener URL del MP4 directo via GQL de Twitch
+            let clipMp4 = null;
+            if (clip?.id) {
+              try {
+                const gqlRes = await fetch('https://gql.twitch.tv/gql', {
+                  method: 'POST',
+                  headers: { 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json' },
+                  body: JSON.stringify([{ query: `{ clip(slug: "${clip.id}") { videoQualities { frameRate quality sourceURL } } }` }])
+                });
+                const gqlData = await gqlRes.json();
+                const qualities = gqlData?.[0]?.data?.clip?.videoQualities || [];
+                // Elegir la mejor calidad disponible
+                const best = qualities.find(q => q.quality === '1080') || qualities.find(q => q.quality === '720') || qualities[0];
+                clipMp4 = best?.sourceURL || null;
+              } catch(e) { console.error('[!so GQL]', e.message); }
+            }
+
             const shoutoutData = {
               username: touser,
               display_name: userData2.data[0].display_name,
               clip_url: clip?.url || null,
               clip_id: clip?.id || null,
+              clip_mp4: clipMp4,
               clip_thumbnail: clip?.thumbnail_url || null,
               clip_title: clip?.title || null,
               game: clip?.game_name || 'un juego',
