@@ -1910,6 +1910,57 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     return;
   }
 
+  // ── !so — Shoutout con clip aleatorio y overlay ──
+  const soCmd = Object.keys(config.commands || {}).find(k => k === '!so');
+  if (firstWord === '!so' && soCmd) {
+    const args = message.trim().split(/\s+/).slice(1).filter(Boolean);
+    const touser = args[0] ? args[0].replace('@','').trim() : null;
+    if (touser) {
+      try {
+        const appToken = await getTwitchAppToken();
+        if (appToken) {
+          // Obtener user_id del canal al que hacemos so
+          const userRes = await fetch(`https://api.twitch.tv/helix/users?login=${touser}`,
+            { headers: { 'Authorization': `Bearer ${appToken}`, 'Client-Id': process.env.TWITCH_CLIENT_ID||'' } });
+          const userData2 = await userRes.json();
+          const userId = userData2?.data?.[0]?.id;
+
+          if (userId) {
+            // Buscar clips del canal
+            const clipsRes = await fetch(`https://api.twitch.tv/helix/clips?broadcaster_id=${userId}&first=20`,
+              { headers: { 'Authorization': `Bearer ${appToken}`, 'Client-Id': process.env.TWITCH_CLIENT_ID||'' } });
+            const clipsData = await clipsRes.json();
+            const clips = clipsData?.data || [];
+
+            if (clips.length) {
+              // Elegir clip aleatorio
+              const clip = clips[Math.floor(Math.random() * clips.length)];
+
+              // Guardar shoutout en Supabase para el overlay
+              await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+                method: 'PATCH',
+                headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+                body: JSON.stringify({
+                  last_shoutout: {
+                    username: touser,
+                    display_name: userData2.data[0].display_name,
+                    clip_url: clip.url,
+                    clip_embed: clip.embed_url,
+                    clip_thumbnail: clip.thumbnail_url,
+                    clip_title: clip.title,
+                    game: clip.game_id ? clip.game_name || 'un juego' : 'un juego',
+                    timestamp: Date.now()
+                  }
+                })
+              });
+            }
+          }
+        }
+      } catch(e) { console.error('[!so overlay]', e.message); }
+    }
+    // Dejar que el comando personalizado responda en chat normalmente
+  }
+
   // ── !chiste ──
   if (firstWord === '!chiste' || firstWord === '!joke') {
     if (!isSysCmdEnabled(channelName, 'chiste')) return;
