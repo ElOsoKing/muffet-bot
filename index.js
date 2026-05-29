@@ -1945,6 +1945,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
                   body: JSON.stringify([{ query: `{ clip(slug: "${clip.id}") { videoQualities { frameRate quality sourceURL } } }` }])
                 });
                 const gqlData = await gqlRes.json();
+                console.log('[!so GQL]', JSON.stringify(gqlData).slice(0,300));
                 const qualities = gqlData?.[0]?.data?.clip?.videoQualities || [];
                 // Elegir la mejor calidad disponible
                 const best = qualities.find(q => q.quality === '1080') || qualities.find(q => q.quality === '720') || qualities[0];
