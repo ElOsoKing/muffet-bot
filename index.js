@@ -1961,6 +1961,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
               clip_mp4: clipMp4,
               clip_thumbnail: clip?.thumbnail_url || null,
               clip_title: clip?.title || null,
+              clip_duration: clip?.duration || 30,
               game: clip?.game_name || 'un juego',
               timestamp: Date.now()
             };
