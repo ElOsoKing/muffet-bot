@@ -1918,47 +1918,43 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (touser) {
       try {
         const appToken = await getTwitchAppToken();
+        console.log(`[!so] touser:${touser} token:${appToken?'ok':'null'}`);
         if (appToken) {
-          // Obtener user_id del canal al que hacemos so
           const userRes = await fetch(`https://api.twitch.tv/helix/users?login=${touser}`,
             { headers: { 'Authorization': `Bearer ${appToken}`, 'Client-Id': process.env.TWITCH_CLIENT_ID||'' } });
           const userData2 = await userRes.json();
           const userId = userData2?.data?.[0]?.id;
+          console.log(`[!so] userId:${userId}`);
 
           if (userId) {
-            // Buscar clips del canal
             const clipsRes = await fetch(`https://api.twitch.tv/helix/clips?broadcaster_id=${userId}&first=20`,
               { headers: { 'Authorization': `Bearer ${appToken}`, 'Client-Id': process.env.TWITCH_CLIENT_ID||'' } });
             const clipsData = await clipsRes.json();
             const clips = clipsData?.data || [];
+            console.log(`[!so] clips encontrados:${clips.length}`);
 
-            if (clips.length) {
-              // Elegir clip aleatorio
-              const clip = clips[Math.floor(Math.random() * clips.length)];
+            const clip = clips.length ? clips[Math.floor(Math.random() * clips.length)] : null;
 
-              // Guardar shoutout en Supabase para el overlay
-              await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-                method: 'PATCH',
-                headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-                body: JSON.stringify({
-                  last_shoutout: {
-                    username: touser,
-                    display_name: userData2.data[0].display_name,
-                    clip_url: clip.url,
-                    clip_embed: clip.embed_url,
-                    clip_thumbnail: clip.thumbnail_url,
-                    clip_title: clip.title,
-                    game: clip.game_id ? clip.game_name || 'un juego' : 'un juego',
-                    timestamp: Date.now()
-                  }
-                })
-              });
-            }
+            const shoutoutData = {
+              username: touser,
+              display_name: userData2.data[0].display_name,
+              clip_url: clip?.url || null,
+              clip_thumbnail: clip?.thumbnail_url || null,
+              clip_title: clip?.title || null,
+              game: clip?.game_name || 'un juego',
+              timestamp: Date.now()
+            };
+
+            const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+              method: 'PATCH',
+              headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+              body: JSON.stringify({ last_shoutout: shoutoutData })
+            });
+            console.log(`[!so] guardado en supabase: ${saveRes.status}`);
           }
         }
       } catch(e) { console.error('[!so overlay]', e.message); }
     }
-    // Dejar que el comando personalizado responda en chat normalmente
   }
 
   // ── !chiste ──
