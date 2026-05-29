@@ -1195,9 +1195,33 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       });
       const clipData = await clipRes.json();
 
-      if (clipData.data?.[0]?.edit_url) {
-        const clipUrl = clipData.data[0].edit_url.replace('/edit', '');
-        client.say(channel, `✂️ ¡Clip creado por @${username}! ${clipUrl} 🕷️`);
+      if (clipData.data?.[0]?.id) {
+        const clipId = clipData.data[0].id;
+        client.say(channel, `✂️ @${username} Creando el clip... 🕷️`);
+
+        // Verificar hasta 5 veces cada 3 segundos si el clip ya está listo
+        let clipUrl = null;
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          try {
+            const checkRes = await fetch(`https://api.twitch.tv/helix/clips?id=${clipId}`, {
+              headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' }
+            });
+            const checkData = await checkRes.json();
+            if (checkData.data?.[0]?.url) {
+              clipUrl = checkData.data[0].url;
+              break;
+            }
+          } catch(e) {}
+        }
+
+        if (clipUrl) {
+          client.say(channel, `✅ ¡Clip listo! ${clipUrl} 🕷️`);
+        } else {
+          client.say(channel, `@${username} El clip se está procesando, revísalo en tu canal de Twitch 🕷️`);
+        }
+      } else if (clipData.error) {
+        client.say(channel, `@${username} No se pudo crear el clip — el stream debe llevar al menos 90 segundos en vivo 🕷️`);
       } else {
         client.say(channel, `@${username} No se pudo crear el clip — ¿el stream está en vivo? 🕷️`);
       }
