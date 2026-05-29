@@ -1972,6 +1972,16 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
               body: JSON.stringify({ last_shoutout: shoutoutData })
             });
             console.log(`[!so] guardado en supabase: ${saveRes.status}`);
+
+            // Cachear el MP4 en el servidor para reproducción sin restricciones
+            if (clipMp4) {
+              const dashboardUrl = process.env.DASHBOARD_URL || 'https://muffet-dashboard.onrender.com';
+              fetch(`${dashboardUrl}/api/cache-clip`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: channelName, url: clipMp4 })
+              }).then(r => r.json()).then(d => console.log(`[!so] clip cacheado:`, d)).catch(e => console.error('[!so cache]', e.message));
+            }
           }
         }
       } catch(e) { console.error('[!so overlay]', e.message); }
