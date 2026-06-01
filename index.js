@@ -1108,9 +1108,15 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const oldLevel = levels.filter(l => currentXP >= l.xp).pop();
     const newLevel = levels.filter(l => newXP >= l.xp).pop();
 
-    if (newLevel && oldLevel && newLevel.level > oldLevel.level) {
+    // Solo anunciar si realmente subió de nivel — comparar con nivel guardado
+    const savedLevel = viewerPoints[userLower + '_level'] || 1;
+    if (newLevel && newLevel.level > savedLevel) {
       const emoji = pointsConfig.emoji || '🏆';
       setTimeout(() => client.say(channel, `🎉 ¡@${username} subió al nivel ${newLevel.level} — ${newLevel.name}! ${emoji}`), 1000);
+      viewerPoints[userLower + '_level'] = newLevel.level;
+    } else if (newLevel && !viewerPoints[userLower + '_level']) {
+      // Inicializar nivel guardado sin anunciar
+      viewerPoints[userLower + '_level'] = newLevel.level;
     }
 
     // Guardar XP
