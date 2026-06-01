@@ -68,7 +68,19 @@ async function loadAllChannels() {
         off_message:   s.off_message   || null,
         counters:           s.counters           || {},
         points_config:      s.points_config      || {},
-        viewer_points:      s.viewer_points      || {},
+        viewer_points:      (() => {
+          const vp = s.viewer_points || {};
+          const levels = s.points_config?.levels || [{level:1,xp:0},{level:2,xp:100},{level:3,xp:300},{level:4,xp:600},{level:5,xp:1000}];
+          // Inicializar nivel guardado para cada usuario sin anunciar
+          Object.keys(vp).filter(k => !k.endsWith('_level')).forEach(user => {
+            if (!vp[user + '_level']) {
+              const xp = vp[user] || 0;
+              const lvl = levels.filter(l => xp >= l.xp).pop();
+              if (lvl) vp[user + '_level'] = lvl.level;
+            }
+          });
+          return vp;
+        })(),
         social_links:       s.social_links       || {},
         raffle_settings:    s.raffle_settings    || {},
         system_commands:    s.system_commands    || {},
