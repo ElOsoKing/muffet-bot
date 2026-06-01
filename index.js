@@ -22,6 +22,7 @@ let channelConfigs = {}; // { 'elosoking1': { bot_prompt, commands, ... } }
 let muffetActiveMap = {}; // { 'elosoking1': true/false }
 let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let greetedMap = {}; // { 'elosoking1': Set() }
+const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
 const chatViewers = {}; // { 'elosoking1': Set() } — viewers que han escrito en el chat
 
 const defaultConfig = (username) => ({
@@ -71,7 +72,12 @@ async function loadAllChannels() {
         viewer_points:      (() => {
           const vp = s.viewer_points || {};
           const levels = s.points_config?.levels || [{level:1,xp:0},{level:2,xp:100},{level:3,xp:300},{level:4,xp:600},{level:5,xp:1000}];
-          // Inicializar nivel guardado para cada usuario sin anunciar
+          // Preservar _level guardados en memoria (no sobreescribir con reload)
+          const existing = channelConfigs[ch]?.viewer_points || {};
+          Object.keys(existing).filter(k => k.endsWith('_level')).forEach(k => {
+            vp[k] = existing[k];
+          });
+          // Inicializar _level para usuarios que no lo tengan
           Object.keys(vp).filter(k => !k.endsWith('_level')).forEach(user => {
             if (!vp[user + '_level']) {
               const xp = vp[user] || 0;
@@ -566,7 +572,7 @@ async function handleMessage(client, channel, tags, message, self) {
   if (!greetedMap[channelName].has(username.toLowerCase())) {
     greetedMap[channelName].add(username.toLowerCase());
 
-    if (muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName]) {
+    if (muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
       const isViewbot = /https?:\/\//i.test(message) ||
         /buy\s*(followers|viewers|views|subs)/i.test(message) ||
         /get\s*(views|viewers|followers)/i.test(message) ||
