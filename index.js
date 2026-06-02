@@ -2039,19 +2039,28 @@ function setupEvents(client) {
   });
 
   // Sub gift individual
+  // Buffer para ignorar subgift individuales cuando son parte de un mystery gift
+  const mysteryGiftBuffer = {}; // { 'ch_username': timestamp }
+
+  client.on('submysterygift', async (channel, username, numbOfSubs) => {
+    const ch = channel.replace('#','');
+    if (muffetActiveMap[ch] === false) return;
+    // Marcar que este usuario está haciendo mystery gift — ignorar subgifts individuales por 10s
+    mysteryGiftBuffer[`${ch}_${username}`] = Date.now();
+    const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
+    botSay(client, channel, msg, true);
+  });
+
   client.on('subgift', async (channel, username, recipient, methods) => {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
     if (username === 'ananonymousgifter') return;
+    // Si es parte de un mystery gift reciente, ignorar
+    const bufferKey = `${ch}_${username}`;
+    if (mysteryGiftBuffer[bufferKey] && Date.now() - mysteryGiftBuffer[bufferKey] < 10000) return;
+    // Si recipient es inválido ignorar
+    if (!recipient || recipient === '0' || recipient === 'anonymous') return;
     const msg = await getMuffetResponse(ch, `@${username} le acaba de regalar una suscripción a @${recipient}. Menciona los dos nombres y agradécele lo generoso que es.`, username);
-    botSay(client, channel, msg, true);
-  });
-
-  // Gift masivo (cuando regalan 5, 10, 20 subs a la vez)
-  client.on('submysterygift', async (channel, username, numbOfSubs) => {
-    const ch = channel.replace('#','');
-    if (muffetActiveMap[ch] === false) return;
-    const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
     botSay(client, channel, msg, true);
   });
 
