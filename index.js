@@ -2174,24 +2174,10 @@ async function start() {
     if (!autoMsgQueue[ch]?.items?.length) return;
     autoMsgQueue[ch].processing = true;
     while (autoMsgQueue[ch].items.length > 0) {
-      const { text, type, channelName } = autoMsgQueue[ch].items.shift();
+      const { text, channelName } = autoMsgQueue[ch].items.shift();
       const client = customClients[channelName] || mainClient;
       try {
-        if (type === 'ai') {
-          const chConfig = channelConfigs[channelName];
-          const aiMsg = await groq.chat.completions.create({
-            model: 'llama-3.1-8b-instant',
-            messages: [
-              { role: 'system', content: chConfig.bot_prompt },
-              { role: 'user', content: `Escribe un mensaje corto para el chat sobre: "${text}". Máximo 1 oración con tu personalidad.` }
-            ],
-            max_tokens: 100, temperature: 0.9,
-          });
-          const aiText = aiMsg.choices[0]?.message?.content || text;
-          client.say(`#${channelName}`, aiText).catch(() => {});
-        } else {
-          client.say(`#${channelName}`, text).catch(() => {});
-        }
+        client.say(`#${channelName}`, text).catch(() => {});
       } catch(e) {
         client.say(`#${channelName}`, text).catch(() => {});
       }
@@ -2225,7 +2211,6 @@ async function start() {
 
       config.auto_messages.forEach(msg => {
         const text     = typeof msg === 'object' ? msg.text     : msg;
-        const type     = typeof msg === 'object' ? msg.type     : 'fixed';
         const interval = typeof msg === 'object' ? msg.interval : (config.auto_message_interval || 20);
         const intervalMs = Math.max(interval, 5) * 60 * 1000;
 
@@ -2235,7 +2220,7 @@ async function start() {
           const lastActivity = lastChatActivity[ch];
           if (lastActivity && Date.now() - lastActivity > 10 * 60 * 1000) return;
           if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
-          autoMsgQueue[ch].items.push({ text, type, channelName: ch });
+          autoMsgQueue[ch].items.push({ text, channelName: ch });
           processAutoMsgQueue(ch);
         }, intervalMs);
 
