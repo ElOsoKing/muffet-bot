@@ -2159,7 +2159,7 @@ async function start() {
   await setupCustomBots();
 
   // Iniciar polling de ganadores de sorteo
-  setInterval(checkRaffleWinners, 5000);
+  setInterval(checkRaffleWinners, 10000);
 
   // Iniciar polling de stream en vivo (cada 60s)
   setInterval(checkStreamsLive, 60000);
