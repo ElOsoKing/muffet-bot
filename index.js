@@ -270,7 +270,6 @@ async function resolveVariables(text, channelName, username, touser) {
       const targetUser = match[1].toLowerCase().replace('@','').replace(/\s+/g,'').trim();
       try {
         const token = await getTwitchAppToken();
-        console.log('[game:var] token:', token ? 'ok' : 'null', '| target:', targetUser);
         if (token) {
           const userRes = await fetch(
             `https://api.twitch.tv/helix/users?login=${targetUser}`,
@@ -278,7 +277,6 @@ async function resolveVariables(text, channelName, username, touser) {
           );
           const userData2 = await userRes.json();
           const userId = userData2?.data?.[0]?.id;
-          console.log('[game:var] userId:', userId);
           let game = 'un juego';
           if (userId) {
             const channelRes = await fetch(
@@ -286,7 +284,6 @@ async function resolveVariables(text, channelName, username, touser) {
               { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
             );
             const channelData = await channelRes.json();
-            console.log('[game:var] game_name:', channelData?.data?.[0]?.game_name);
             game = channelData?.data?.[0]?.game_name || 'un juego';
           }
           result = result.replace(match[0], game);
@@ -294,7 +291,7 @@ async function resolveVariables(text, channelName, username, touser) {
           result = result.replace(match[0], 'un juego');
         }
       } catch(e) {
-        console.error('[game:var] error:', e.message);
+        console.error('[game:var] error:', e.message); // mantener este
         result = result.replace(match[0], 'un juego');
       }
     }
@@ -1146,10 +1143,15 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       channelConfigs[channelName]._pointsFlushTimer = setTimeout(async () => {
         channelConfigs[channelName]._pointsFlushTimer = null;
         try {
+          // Filtrar keys internas (_level, etc) antes de guardar en Supabase
+          const pointsToSave = Object.fromEntries(
+            Object.entries(channelConfigs[channelName].viewer_points || {})
+              .filter(([k]) => !k.endsWith('_level') && !k.startsWith('_'))
+          );
           await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
             method: 'PATCH',
             headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ viewer_points: channelConfigs[channelName].viewer_points })
+            body: JSON.stringify({ viewer_points: pointsToSave })
           });
         } catch(e) {}
       }, 60000);
