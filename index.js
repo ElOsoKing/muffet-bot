@@ -628,7 +628,7 @@ async function handleMessage(client, channel, tags, message, self) {
           if (!isWhitelisted && !isSub && !isVIP) {
             client.deletemessage(channel, tags.id).catch(() => {});
             client.say(channel, `@${username} Los links no están permitidos~ 🕷️`);
-            if (modCfg.timeout_links) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Link no permitido').catch(() => {});
+            if (modCfg.timeout_links) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Link no permitido').catch(e => console.error('[mod] timeout links error:', e.message));
             return;
           }
         }
@@ -648,7 +648,7 @@ async function handleMessage(client, channel, tags, message, self) {
         if (tracker.msgs.length > maxMsgs || (isRepeat && tracker.msgs.length > 2)) {
           client.deletemessage(channel, tags.id).catch(() => {});
           client.say(channel, `@${username} ¡No hagas spam, dearie~ 🕷️`);
-          if (modCfg.timeout_spam) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Spam detectado').catch(() => {});
+          if (modCfg.timeout_spam) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Spam detectado').catch(e => console.error('[mod] timeout spam error:', e.message));
           tracker.msgs = [];
           return;
         }
@@ -657,9 +657,9 @@ async function handleMessage(client, channel, tags, message, self) {
       // ── Palabras prohibidas ──
       if (config.banned_words?.length > 0) {
         if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
-          client.deletemessage(channel, tags.id).catch(() => {});
+          client.deletemessage(channel, tags.id).catch(e => console.error('[mod] delete error:', e.message));
           client.say(channel, `@${username} ${warnMsg}`);
-          if (modCfg.timeout_banned) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Palabra prohibida').catch(() => {});
+          if (modCfg.timeout_banned) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Palabra prohibida').catch(e => console.error('[mod] timeout banned error:', e.message));
           return;
         }
       }
@@ -670,7 +670,7 @@ async function handleMessage(client, channel, tags, message, self) {
         if (check.flagged) {
           client.deletemessage(channel, tags.id).catch(() => {});
           client.say(channel, `@${username} ${warnMsg}`);
-          if (modCfg.timeout_ai) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Moderación IA').catch(() => {});
+          if (modCfg.timeout_ai) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Moderación IA').catch(e => console.error('[mod] timeout AI error:', e.message));
           return;
         }
       }
