@@ -508,6 +508,44 @@ async function handleMessage(client, channel, tags, message, self) {
   if (!chatViewers[channelName]) chatViewers[channelName] = new Set();
   chatViewers[channelName].add(username.toLowerCase());
 
+  // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
+  if (tags['custom-reward-id']) {
+    const rewardTitle = (tags['msg-id'] || message || '').trim().toLowerCase();
+    const raffleReward = (channelConfigs[channelName]?.raffle_settings?.reward_name || '').trim().toLowerCase();
+    // Comparar por nombre del reward configurado
+    // En TMI.js el título de la recompensa no viene directo, pero el mensaje sí
+    // Si el streamer configura el reward para que pida texto, el mensaje ES el texto
+    // Comparamos contra el reward_id guardado o usamos el mensaje como nombre
+    const msgLower2 = message.trim().toLowerCase();
+    if (raffleReward && (msgLower2 === raffleReward || tags['custom-reward-id'] === channelConfigs[channelName]?.raffle_settings?.reward_id)) {
+      // Hay un canje que coincide — agregar al sorteo si está activo
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const data = await res.json();
+        const raffle = data?.[0]?.raffle_active || {};
+        if (raffle.active) {
+          const participants = raffle.participants || [];
+          if (!participants.includes(username)) {
+            participants.push(username);
+            await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+              method: 'PATCH',
+              headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ raffle_active: { ...raffle, participants } })
+            });
+            const client2 = customClients[channelName] || mainClient;
+            client2.say(`#${channelName}`, `✅ @${username} ¡Canjeaste tu entrada al sorteo! Somos ${participants.length} participantes 🎉🕷️`);
+            console.log(`[Raffle] ${username} agregado via canje en #${channelName}`);
+          } else {
+            const client2 = customClients[channelName] || mainClient;
+            client2.say(`#${channelName}`, `@${username} ¡Ya estás participando en el sorteo, dearie! 🕷️`);
+          }
+        }
+      } catch(e) { console.error('[Raffle redemption error]', e.message); }
+      return;
+    }
+  }
+
   // ── Comandos de control (solo mods) ──
   if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
     if (!isMod(tags, channelName)) return;
