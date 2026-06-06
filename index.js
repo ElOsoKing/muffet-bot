@@ -2414,4 +2414,26 @@ async function checkStreamsLive() {
     }
   } catch(e) {}
 }
+// ── Servidor HTTP para recibir eventos del dashboard ──
+const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/event') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        if (data.secret !== BOT_SECRET) { res.writeHead(403); res.end(); return; }
+        handleTwitchEvent(data.type, data.event).catch(e => console.error('[event]', e.message));
+        res.writeHead(200); res.end('ok');
+      } catch(e) { res.writeHead(400); res.end(); }
+    });
+  } else if (req.url === '/health') {
+    res.writeHead(200); res.end('ok');
+  } else {
+    res.writeHead(404); res.end();
+  }
+});
+
+server.listen(BOT_PORT, () => console.log(`🌐 Bot HTTP server en puerto ${BOT_PORT}`));
+
 start().catch(console.error);
