@@ -2293,6 +2293,14 @@ async function start() {
 // ── Handler de eventos de Twitch (follows, subs, bits) ──
 async function handleTwitchEvent(type, event) {
   // ── Ganador del sorteo desde el dashboard ──
+  if (type === 'raffle.redemption') {
+    const { channel, username, count } = event;
+    if (!channel) return;
+    const client2 = customClients[channel] || mainClient;
+    client2.say(`#${channel}`, `✅ @${username} ¡Canjeaste tu entrada al sorteo! Somos ${count} participantes 🎉🕷️`);
+    return;
+  }
+
   if (type === 'raffle.winner') {
     const channelName = event.broadcaster_user_login?.toLowerCase();
     if (!channelName) return;
