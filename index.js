@@ -511,6 +511,7 @@ async function handleMessage(client, channel, tags, message, self) {
   // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
   if (tags['custom-reward-id']) {
     const configuredRewardId = channelConfigs[channelName]?.raffle_settings?.reward_id;
+    console.log(`[canje] ${username} canjeó reward_id: ${tags['custom-reward-id']} | configurado: ${configuredRewardId || 'ninguno'}`);
     if (configuredRewardId && tags['custom-reward-id'] === configuredRewardId) {
       // Hay un canje que coincide — agregar al sorteo si está activo
       try {
