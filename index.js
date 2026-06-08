@@ -870,6 +870,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Limpiar canciones cuya duración ya pasó (con 30s de margen extra)
       userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s => Date.now() - s.addedAt < s.durationMs + 30000);
       const userPending = userSongTracker[chKey][userKey].length;
+      console.log(`[music limit] chKey=${chKey} userKey=${userKey} pending=${userPending} max=${maxPerUser} tracker=${JSON.stringify(userSongTracker[chKey][userKey].map(s=>({uri:s.uri.slice(-10),age:Math.round((Date.now()-s.addedAt)/1000)+'s',dur:Math.round(s.durationMs/1000)+'s'})))}`);
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
