@@ -877,6 +877,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         s.uri.startsWith('pending_') || Date.now() - s.addedAt < s.durationMs + 30000
       );
       const userPending = userSongTracker[chKey][userKey].length;
+      console.log(`[CHECK] PID:${process.pid} chKey:${chKey} userKey:${userKey} pending:${userPending} max:${maxPerUser}`);
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
@@ -884,6 +885,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Reservar slot INMEDIATAMENTE para evitar race conditions
       const placeholder = { uri: 'pending_' + Date.now(), addedAt: Date.now(), durationMs: 240000 };
       userSongTracker[chKey][userKey].push(placeholder);
+      console.log(`[PUSH] PID:${process.pid} chKey:${chKey} userKey:${userKey} len:${userSongTracker[chKey][userKey].length} uris:${JSON.stringify(userSongTracker[chKey][userKey].map(x=>x.uri.startsWith('pending_')?'PENDING':x.uri.slice(-8)))}`);
 
       // !cancion nombre — buscar y agregar
       // Detectar si es un link de Spotify
