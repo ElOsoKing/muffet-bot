@@ -753,43 +753,73 @@ async function getSpotifyToken(channelName) {
 }
 
   // ── Spotify ──
-// Límite de canciones — se persiste en Supabase para sobrevivir reinicios
-const songLimitMap = new Map(); // cache local: "canal:usuario" → count
-const activeSongRequests = new Set(); // Mutex
+// Mutex — evita race conditions en !cancion
+const activeSongRequests = new Set();
 
-async function getSongLimit(chKey, userKey) {
-  const localKey = `${chKey}:${userKey}`;
-  if (songLimitMap.has(localKey)) return songLimitMap.get(localKey);
-  // Cargar de Supabase si no está en cache
+// ── Monitor — Spotify como fuente de verdad (Gemini approach) ──
+async function trackNowPlaying() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${chKey}&select=spotify_config&limit=1`,
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,spotify_config`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data = await res.json();
-    const limits = data?.[0]?.spotify_config?.song_limits || {};
-    const count = limits[userKey] || 0;
-    songLimitMap.set(localKey, count);
-    return count;
-  } catch(e) { return songLimitMap.get(localKey) || 0; }
+    const streamers = await res.json();
+    if (!Array.isArray(streamers)) return;
+
+    for (const s of streamers) {
+      const channelName = s.twitch_username.toLowerCase();
+      const spotConfig = s.spotify_config || {};
+      const limits = spotConfig.song_limits || {};
+      if (Object.keys(limits).length === 0) continue;
+
+      const token = await getSpotifyToken(channelName);
+      if (!token) continue;
+
+      const [qRes, nowRes] = await Promise.all([
+        fetch('https://api.spotify.com/v1/me/player/queue', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
+
+      const qData = qRes.ok ? await qRes.json() : null;
+      const nowData = nowRes.status === 200 ? await nowRes.json() : null;
+
+      const spotifyUris = [
+        ...(nowData?.item?.uri ? [nowData.item.uri] : []),
+        ...(qData?.queue || []).map(t => t.uri)
+      ];
+
+      let needsUpdate = false;
+      const newLimits = {};
+
+      for (const [user, userSongs] of Object.entries(limits)) {
+        if (!Array.isArray(userSongs)) continue;
+        const validSongs = [];
+        for (const song of userSongs) {
+          const idx = spotifyUris.indexOf(song.uri);
+          if (idx !== -1) {
+            validSongs.push(song);
+            spotifyUris.splice(idx, 1);
+          } else if (Date.now() - song.addedAt < 30000) {
+            // Canción muy reciente — puede que Spotify aún no la sincronizó
+            validSongs.push(song);
+          }
+          // Si no cumple ninguna → ya sonó o fue saltada → slot liberado
+        }
+        if (validSongs.length !== userSongs.length) needsUpdate = true;
+        if (validSongs.length > 0) newLimits[user] = validSongs;
+      }
+
+      if (needsUpdate) {
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spotify_config: { ...spotConfig, song_limits: newLimits } })
+        });
+        console.log(`[music] Límites actualizados para #${channelName}`);
+      }
+    }
+  } catch(e) { console.error('[trackNowPlaying]', e.message); }
 }
 
-async function setSongLimit(chKey, userKey, count) {
-  const localKey = `${chKey}:${userKey}`;
-  songLimitMap.set(localKey, count);
-  // Persistir en Supabase
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${chKey}&select=spotify_config&limit=1`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const data = await res.json();
-    const sConfig = data?.[0]?.spotify_config || {};
-    const limits = { ...(sConfig.song_limits || {}), [userKey]: count };
-    if (count <= 0) delete limits[userKey];
-    await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${chKey}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ spotify_config: { ...sConfig, song_limits: limits } })
-    });
-  } catch(e) {}
-}
+setInterval(trackNowPlaying, 15000);
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 
 
@@ -862,21 +892,18 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return;
       }
 
-      // ── Límite por usuario con songLimitMap ──
+      // ── Límite por usuario — Spotify como fuente de verdad ──
       const maxPerUser = spotifyConfig.max_per_user || 3;
       const chKey = channelName.replace('#','').toLowerCase();
       const userKey = username.toLowerCase();
-      const limitKey = `${chKey}:${userKey}`;
-      const userPending = await getSongLimit(chKey, userKey);
+      const limitsObj = spotifyConfig.song_limits || {};
+      const userSongs = Array.isArray(limitsObj[userKey]) ? limitsObj[userKey] : [];
+      const userPending = userSongs.length;
 
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
       }
-
-      // Incrementar ANTES de cualquier await
-      await setSongLimit(chKey, userKey, userPending + 1);
-      console.log(`[limit] ${limitKey}: ${userPending + 1}/${maxPerUser}`);
 
       // ── Buscar track ──
       const spotifyLinkMatch = query.match(/open\.spotify\.com\/track\/([a-zA-Z0-9]+)/);
@@ -886,10 +913,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         const trackId = spotifyLinkMatch[1];
         const trackRes = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`,
           { headers: { 'Authorization': `Bearer ${token}` } });
-        if (!trackRes.ok) {
-          const c = await getSongLimit(chKey, userKey); if (c > 0) await setSongLimit(chKey, userKey, c - 1);
-          client.say(channel, `@${username} No pude obtener esa canción~ 🎵`); return;
-        }
+        if (!trackRes.ok) { client.say(channel, `@${username} No pude obtener esa canción~ 🎵`); return; }
         track = await trackRes.json();
       } else {
         let searchQuery = query;
@@ -909,10 +933,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
             { headers: { 'Authorization': `Bearer ${token}` } });
           tracks = (await fallRes.json()).tracks?.items || [];
         }
-        if (!tracks.length) {
-          const c = await getSongLimit(chKey, userKey); if (c > 0) await setSongLimit(chKey, userKey, c - 1);
-          client.say(channel, `@${username} No encontré esa canción~ 🎵`); return;
-        }
+        if (!tracks.length) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
         const queryLower = query.toLowerCase().replace(' - ', ' ');
         track = tracks.reduce((best, t) => {
           const combined = `${t.name} ${t.artists[0].name}`.toLowerCase();
@@ -928,49 +949,41 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return track.name.toLowerCase().includes(bl) || track.artists[0].name.toLowerCase().includes(bl);
       });
       if (isBlocked) {
-        const c = await getSongLimit(chKey, userKey); if (c > 0) await setSongLimit(chKey, userKey, c - 1);
         client.say(channel, `@${username} Esa canción o artista está en la lista negra~ 🕷️`);
         return;
       }
 
-      // Programar liberación del slot cuando dure la canción
-      const safeDuration = (typeof track.duration_ms === 'number' && track.duration_ms > 0) ? track.duration_ms : 240000;
-      const releaseTime = Math.max(safeDuration, 3 * 60 * 1000) + 30000;
-      setTimeout(async () => {
-        const cur = await getSongLimit(chKey, userKey);
-        if (cur > 0) { await setSongLimit(chKey, userKey, cur - 1); console.log(`[limit release] ${limitKey}: ${cur-1}`); }
-      }, releaseTime);
-
+      // Agregar a Spotify
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (queueRes.status === 204 || queueRes.status === 200) {
-        const newPending = await getSongLimit(chKey, userKey);
-        const remaining = maxPerUser - newPending;
+        // Guardar en song_limits con URI para que el monitor pueda liberar el slot
+        userSongs.push({ uri: track.uri, addedAt: Date.now() });
+        limitsObj[userKey] = userSongs;
+        const remaining = maxPerUser - userSongs.length;
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
+        console.log(`[limit] ${chKey}:${userKey}: ${userSongs.length}/${maxPerUser}`);
 
-        // Guardar en historial
+        // Guardar en Supabase (límites + historial en una sola llamada)
         try {
           const histRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
             { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
           const histData = await histRes.json();
-          const spotifyConfig = histData?.[0]?.spotify_config || {};
-          const history = spotifyConfig.history || [];
+          const freshConfig = histData?.[0]?.spotify_config || {};
+          const history = freshConfig.history || [];
           history.unshift({ name: track.name, artist: track.artists[0].name, image: track.album?.images?.[1]?.url || '', requester: username.toLowerCase(), requestedAt: new Date().toISOString() });
           if (history.length > 20) history.pop();
           await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
             method: 'PATCH',
             headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ spotify_config: { ...spotifyConfig, history } })
+            body: JSON.stringify({ spotify_config: { ...freshConfig, song_limits: limitsObj, history } })
           });
         } catch(e) {}
       } else {
-        // Revertir slot si falló
-        const failCurrent = await getSongLimit(chKey, userKey);
-        if (failCurrent > 0) await setSongLimit(chKey, userKey, failCurrent - 1);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
