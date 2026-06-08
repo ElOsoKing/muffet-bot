@@ -753,10 +753,43 @@ async function getSpotifyToken(channelName) {
 }
 
   // ── Spotify ──
-// Límite de canciones por usuario — Map es más robusto que objeto plano
-// clave: "canal:usuario" → número de canciones pendientes
-const songLimitMap = new Map();
+// Límite de canciones — se persiste en Supabase para sobrevivir reinicios
+const songLimitMap = new Map(); // cache local: "canal:usuario" → count
 const activeSongRequests = new Set(); // Mutex
+
+async function getSongLimit(chKey, userKey) {
+  const localKey = `${chKey}:${userKey}`;
+  if (songLimitMap.has(localKey)) return songLimitMap.get(localKey);
+  // Cargar de Supabase si no está en cache
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${chKey}&select=spotify_config&limit=1`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await res.json();
+    const limits = data?.[0]?.spotify_config?.song_limits || {};
+    const count = limits[userKey] || 0;
+    songLimitMap.set(localKey, count);
+    return count;
+  } catch(e) { return songLimitMap.get(localKey) || 0; }
+}
+
+async function setSongLimit(chKey, userKey, count) {
+  const localKey = `${chKey}:${userKey}`;
+  songLimitMap.set(localKey, count);
+  // Persistir en Supabase
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${chKey}&select=spotify_config&limit=1`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await res.json();
+    const sConfig = data?.[0]?.spotify_config || {};
+    const limits = { ...(sConfig.song_limits || {}), [userKey]: count };
+    if (count <= 0) delete limits[userKey];
+    await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${chKey}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spotify_config: { ...sConfig, song_limits: limits } })
+    });
+  } catch(e) {}
+}
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 
 
@@ -834,16 +867,15 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const chKey = channelName.replace('#','').toLowerCase();
       const userKey = username.toLowerCase();
       const limitKey = `${chKey}:${userKey}`;
-      const userPending = songLimitMap.get(limitKey) || 0;
-      console.log(`[limit debug] key="${limitKey}" pending=${userPending} mapSize=${songLimitMap.size} allKeys=${JSON.stringify([...songLimitMap.keys()])}`);
+      const userPending = await getSongLimit(chKey, userKey);
 
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
       }
 
-      // Reservar slot ANTES de cualquier await
-      songLimitMap.set(limitKey, userPending + 1);
+      // Incrementar ANTES de cualquier await
+      await setSongLimit(chKey, userKey, userPending + 1);
       console.log(`[limit] ${limitKey}: ${userPending + 1}/${maxPerUser}`);
 
       // ── Buscar track ──
@@ -855,7 +887,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         const trackRes = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`,
           { headers: { 'Authorization': `Bearer ${token}` } });
         if (!trackRes.ok) {
-          songLimitMap.set(limitKey, Math.max(0, (songLimitMap.get(limitKey)||1) - 1));
+          const c = await getSongLimit(chKey, userKey); if (c > 0) await setSongLimit(chKey, userKey, c - 1);
           client.say(channel, `@${username} No pude obtener esa canción~ 🎵`); return;
         }
         track = await trackRes.json();
@@ -878,7 +910,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           tracks = (await fallRes.json()).tracks?.items || [];
         }
         if (!tracks.length) {
-          songLimitMap.set(limitKey, Math.max(0, (songLimitMap.get(limitKey)||1) - 1));
+          const c = await getSongLimit(chKey, userKey); if (c > 0) await setSongLimit(chKey, userKey, c - 1);
           client.say(channel, `@${username} No encontré esa canción~ 🎵`); return;
         }
         const queryLower = query.toLowerCase().replace(' - ', ' ');
@@ -896,7 +928,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return track.name.toLowerCase().includes(bl) || track.artists[0].name.toLowerCase().includes(bl);
       });
       if (isBlocked) {
-        songLimitMap.set(limitKey, Math.max(0, (songLimitMap.get(limitKey)||1) - 1));
+        const c = await getSongLimit(chKey, userKey); if (c > 0) await setSongLimit(chKey, userKey, c - 1);
         client.say(channel, `@${username} Esa canción o artista está en la lista negra~ 🕷️`);
         return;
       }
@@ -904,9 +936,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Programar liberación del slot cuando dure la canción
       const safeDuration = (typeof track.duration_ms === 'number' && track.duration_ms > 0) ? track.duration_ms : 240000;
       const releaseTime = Math.max(safeDuration, 3 * 60 * 1000) + 30000;
-      setTimeout(() => {
-        const cur = songLimitMap.get(limitKey) || 0;
-        if (cur > 0) { songLimitMap.set(limitKey, cur - 1); console.log(`[limit release] ${limitKey}: ${cur-1}`); }
+      setTimeout(async () => {
+        const cur = await getSongLimit(chKey, userKey);
+        if (cur > 0) { await setSongLimit(chKey, userKey, cur - 1); console.log(`[limit release] ${limitKey}: ${cur-1}`); }
       }, releaseTime);
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
@@ -915,7 +947,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       });
 
       if (queueRes.status === 204 || queueRes.status === 200) {
-        const newPending = songLimitMap.get(limitKey) || 1;
+        const newPending = await getSongLimit(chKey, userKey);
         const remaining = maxPerUser - newPending;
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
@@ -937,8 +969,8 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         } catch(e) {}
       } else {
         // Revertir slot si falló
-        const failCurrent = songLimitMap.get(limitKey) || 0;
-        if (failCurrent > 0) songLimitMap.set(limitKey, failCurrent - 1);
+        const failCurrent = await getSongLimit(chKey, userKey);
+        if (failCurrent > 0) await setSongLimit(chKey, userKey, failCurrent - 1);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
