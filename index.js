@@ -803,14 +803,20 @@ async function processSpotifyQueues() {
       const spotifyQueueSize = (qData?.queue || []).length;
       const slotsAvailable = Math.max(0, 3 - spotifyQueueSize);
 
+      console.log(`[music monitor] #${channelName} — pendientes: ${pendingSend.length}, cola Spotify: ${spotifyQueueSize}, slots: ${slotsAvailable}`);
+
       for (let i = 0; i < Math.min(pendingSend.length, slotsAvailable); i++) {
         const item = pendingSend[i];
         const addRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(item.uri)}`, {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}` }
         });
+        console.log(`[music monitor] Intento agregar "${item.trackName}" → status ${addRes.status}`);
         if (addRes.status === 204 || addRes.status === 200) {
           item.sentToSpotify = true;
-          console.log(`[music] Enviado a Spotify: ${item.trackName} de @${item.requestedBy} en #${channelName}`);
+          console.log(`[music] ✅ Enviado a Spotify: ${item.trackName} de @${item.requestedBy} en #${channelName}`);
+        } else {
+          const errText = await addRes.text().catch(() => '');
+          console.error(`[music] ❌ Error al agregar a Spotify: ${addRes.status} ${errText}`);
         }
       }
     } catch(e) {
@@ -887,7 +893,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Contar canciones pendientes del usuario en la cola de Muffet
       if (!muffetQueue[chKey]) muffetQueue[chKey] = [];
       const userPending = muffetQueue[chKey].filter(i => i.requestedBy === userKey).length;
-      if (userPending >= maxPerUser && !isMod(tags, channelName)) {
+      if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
       }
@@ -967,9 +973,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
       const newPending = muffetQueue[chKey].filter(i => i.requestedBy === userKey).length;
       const remaining = maxPerUser - newPending;
-      const remainingMsg = !isMod(tags, channelName)
-        ? (remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`)
-        : '';
+      const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
 
       // Simular queueRes exitoso para el historial
       const queueRes = { status: 204 };
