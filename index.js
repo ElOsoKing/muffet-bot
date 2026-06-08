@@ -873,9 +873,14 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       if (!userSongTracker[chKey]) userSongTracker[chKey] = {};
       if (!userSongTracker[chKey][userKey]) userSongTracker[chKey][userKey] = [];
       // Limpiar canciones cuya duración ya pasó (ignorar placeholders)
-      userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s =>
-        s.uri.startsWith('pending_') || Date.now() - s.addedAt < s.durationMs + 30000
-      );
+      userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s => {
+        if (s.uri.startsWith('pending_')) return true;
+        const age = Date.now() - s.addedAt;
+        const limit = (s.durationMs || 240000) + 30000;
+        const keep = age < limit;
+        if (!keep) console.log(`[FILTER REMOVE] uri:${s.uri.slice(-8)} age:${Math.round(age/1000)}s limit:${Math.round(limit/1000)}s dur:${s.durationMs}`);
+        return keep;
+      });
       const userPending = userSongTracker[chKey][userKey].length;
       console.log(`[CHECK] PID:${process.pid} chKey:${chKey} userKey:${userKey} pending:${userPending} max:${maxPerUser}`);
       if (userPending >= maxPerUser) {
@@ -964,7 +969,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Reemplazar placeholder con datos reales del track
       const phIdx = userSongTracker[chKey][userKey].indexOf(placeholder);
       if (phIdx !== -1) {
-        userSongTracker[chKey][userKey][phIdx] = { uri: track.uri, addedAt: Date.now(), durationMs: track.duration_ms || 240000 };
+        const safeDuration = (typeof track.duration_ms === 'number' && track.duration_ms > 0) ? track.duration_ms : 240000;
+        userSongTracker[chKey][userKey][phIdx] = { uri: track.uri, addedAt: Date.now(), durationMs: safeDuration };
+        console.log(`[TRACK SET] uri:${track.uri.slice(-8)} duration:${safeDuration}ms`);
       }
       if (nowPlayingUri[chKey] === undefined) nowPlayingUri[chKey] = null;
 
