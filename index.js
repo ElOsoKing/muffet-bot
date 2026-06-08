@@ -755,6 +755,7 @@ async function getSpotifyToken(channelName) {
   // ── Spotify ──
 // Rastreo de canciones pedidas por usuario — { channelName: { username: [uri, uri, ...] } }
 const userSongTracker = {};
+const activeSongRequests = new Set(); // Mutex — evita race conditions en !cancion
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 const nowPlayingUri = {}; // { channelName: uri } — para detectar cambios
 
@@ -783,9 +784,10 @@ async function trackNowPlaying() {
       // Para cada usuario, eliminar canciones que ya no están en Spotify O cuya duración ya pasó
       for (const user of Object.keys(userSongTracker[channelName] || {})) {
         const before = userSongTracker[channelName][user].length;
-        userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(s =>
-          activeUris.has(s.uri) && (Date.now() - s.addedAt < s.durationMs + 30000)
-        );
+        userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(s => {
+          if (s.uri.startsWith('pending_')) return true; // mantener placeholders
+          return activeUris.has(s.uri) && (Date.now() - s.addedAt < s.durationMs + 30000);
+        });
         const after = userSongTracker[channelName][user].length;
         if (after < before) {
           console.log(`[music] @${user} en #${channelName}: ${before} → ${after} canciones pendientes`);
@@ -820,6 +822,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
     if (!isSysCmdEnabled(channelName, 'cancion')) return;
     if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+    // Mutex — bloquear al usuario antes de cualquier await
+    const chKeyMutex = channelName.replace('#','').toLowerCase();
+    const lockKey = `${chKeyMutex}_${username.toLowerCase()}`;
+    if (activeSongRequests.has(lockKey)) return;
+    activeSongRequests.add(lockKey);
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -867,8 +874,10 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Verificar límite por usuario — limpiar entradas viejas (más de 6 min = ya sonaron)
       if (!userSongTracker[chKey]) userSongTracker[chKey] = {};
       if (!userSongTracker[chKey][userKey]) userSongTracker[chKey][userKey] = [];
-      // Limpiar canciones cuya duración ya pasó (con 30s de margen extra)
-      userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s => Date.now() - s.addedAt < s.durationMs + 30000);
+      // Limpiar canciones cuya duración ya pasó (ignorar placeholders)
+      userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s =>
+        s.uri.startsWith('pending_') || Date.now() - s.addedAt < s.durationMs + 30000
+      );
       const userPending = userSongTracker[chKey][userKey].length;
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
@@ -888,7 +897,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         const trackId = spotifyLinkMatch[1];
         const trackRes = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`,
           { headers: { 'Authorization': `Bearer ${token}` } });
-        if (!trackRes.ok) { client.say(channel, `@${username} No pude obtener esa canción~ 🎵`); return; }
+        if (!trackRes.ok) {
+          const pi = userSongTracker[chKey][userKey].indexOf(placeholder);
+          if (pi !== -1) userSongTracker[chKey][userKey].splice(pi, 1);
+          client.say(channel, `@${username} No pude obtener esa canción~ 🎵`); return;
+        }
         track = await trackRes.json();
       } else {
         // Detectar formato "cancion - artista" para búsqueda más precisa
@@ -917,7 +930,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           tracks = fallData.tracks?.items || [];
         }
 
-        if (!tracks.length) { client.say(channel, `@${username} No encontré esa canción~ 🎵`); return; }
+        if (!tracks.length) {
+          const pi = userSongTracker[chKey][userKey].indexOf(placeholder);
+          if (pi !== -1) userSongTracker[chKey][userKey].splice(pi, 1);
+          client.say(channel, `@${username} No encontré esa canción~ 🎵`); return;
+        }
 
         // Elegir el mejor resultado comparando con la búsqueda original
         const queryLower = query.toLowerCase().replace(' - ', ' ');
@@ -984,6 +1001,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
+    finally { activeSongRequests.delete(lockKey); }
     return;
   }
 
