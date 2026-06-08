@@ -758,39 +758,42 @@ const userSongTracker = {};
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 const nowPlayingUri = {}; // { channelName: uri } — para detectar cambios
 
-// ── Monitor — cada 8 segundos detecta cambio de canción y reduce contadores ──
+// ── Monitor — cada 10 segundos compara userSongTracker con cola real de Spotify ──
 async function trackNowPlaying() {
   for (const channelName of Object.keys(userSongTracker)) {
     try {
       const token = await getSpotifyToken(channelName);
       if (!token) continue;
-      const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.status !== 200) continue;
-      const data = await res.json();
-      const currentUri = data?.item?.uri;
-      if (!currentUri) continue;
 
-      // Si cambió la canción, buscar si era de algún usuario y reducir su contador
-      if (nowPlayingUri[channelName] && nowPlayingUri[channelName] !== currentUri) {
-        const prevUri = nowPlayingUri[channelName];
-        for (const user of Object.keys(userSongTracker[channelName] || {})) {
-          const songs = userSongTracker[channelName][user];
-          const idx = songs.indexOf(prevUri);
-          if (idx !== -1) {
-            songs.splice(idx, 1);
-            console.log(`[music] Canción de @${user} completada en #${channelName} — le quedan ${songs.length}`);
-            break;
-          }
+      // Obtener cola actual de Spotify + canción sonando
+      const [qRes, nowRes] = await Promise.all([
+        fetch('https://api.spotify.com/v1/me/player/queue', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
+
+      const qData = qRes.ok ? await qRes.json() : null;
+      const nowData = nowRes.status === 200 ? await nowRes.json() : null;
+
+      // URIs que aún están en Spotify (cola + sonando ahora)
+      const activeUris = new Set([
+        ...(qData?.queue || []).map(t => t.uri),
+        ...(nowData?.item?.uri ? [nowData.item.uri] : [])
+      ]);
+
+      // Para cada usuario, filtrar solo las canciones que siguen en Spotify
+      for (const user of Object.keys(userSongTracker[channelName] || {})) {
+        const before = userSongTracker[channelName][user].length;
+        userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(uri => activeUris.has(uri));
+        const after = userSongTracker[channelName][user].length;
+        if (after < before) {
+          console.log(`[music] @${user} en #${channelName}: ${before} → ${after} canciones pendientes`);
         }
       }
-      nowPlayingUri[channelName] = currentUri;
     } catch(e) {}
   }
 }
 
-setInterval(trackNowPlaying, 8000);
+setInterval(trackNowPlaying, 10000);
 const spamTracker = {}; // { channelName: { username: { msgs: [], lastMsg: '' } } }
 const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
