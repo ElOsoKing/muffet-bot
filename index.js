@@ -896,14 +896,17 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return;
       }
 
+      // Incrementar ANTES del fetch para evitar race conditions
+      if (!isMod(tags, channelName)) spotifyQueueCount[chKey][userKey] = userCount + 1;
+
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (queueRes.status === 204 || queueRes.status === 200) {
-        spotifyQueueCount[chKey][userKey] = userCount + 1;
-        const remaining = maxPerUser - (userCount + 1);
-        const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
+        const newCount = spotifyQueueCount[chKey][userKey] || userCount + 1;
+        const remaining = maxPerUser - newCount;
+        const remainingMsg = !isMod(tags, channelName) ? (remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`) : '';
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
 
         // Guardar en historial
