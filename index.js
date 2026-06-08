@@ -870,11 +870,13 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       // Limpiar canciones cuya duración ya pasó (con 30s de margen extra)
       userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s => Date.now() - s.addedAt < s.durationMs + 30000);
       const userPending = userSongTracker[chKey][userKey].length;
-      console.log(`[music limit] chKey=${chKey} userKey=${userKey} pending=${userPending} max=${maxPerUser} tracker=${JSON.stringify(userSongTracker[chKey][userKey].map(s=>({uri:s.uri.slice(-10),age:Math.round((Date.now()-s.addedAt)/1000)+'s',dur:Math.round(s.durationMs/1000)+'s'})))}`);
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
       }
+      // Reservar slot INMEDIATAMENTE para evitar race conditions
+      const placeholder = { uri: 'pending_' + Date.now(), addedAt: Date.now(), durationMs: 240000 };
+      userSongTracker[chKey][userKey].push(placeholder);
 
       // !cancion nombre — buscar y agregar
       // Detectar si es un link de Spotify
@@ -935,12 +937,18 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return trackNameLower.includes(bl) || artistNameLower.includes(bl);
       });
       if (isBlocked) {
+        // Revertir placeholder
+        const blIdx = userSongTracker[chKey][userKey].indexOf(placeholder);
+        if (blIdx !== -1) userSongTracker[chKey][userKey].splice(blIdx, 1);
         client.say(channel, `@${username} Esa canción o artista está en la lista negra~ 🕷️`);
         return;
       }
 
-      // Agregar directo a Spotify + rastrear para el límite
-      userSongTracker[chKey][userKey].push({ uri: track.uri, addedAt: Date.now(), durationMs: track.duration_ms || 240000 });
+      // Reemplazar placeholder con datos reales del track
+      const phIdx = userSongTracker[chKey][userKey].indexOf(placeholder);
+      if (phIdx !== -1) {
+        userSongTracker[chKey][userKey][phIdx] = { uri: track.uri, addedAt: Date.now(), durationMs: track.duration_ms || 240000 };
+      }
       if (nowPlayingUri[chKey] === undefined) nowPlayingUri[chKey] = null;
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
@@ -971,8 +979,8 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         } catch(e) {}
       } else {
         // Revertir tracker si falló
-        const idx = userSongTracker[chKey][userKey].findIndex(s => s.uri === track.uri);
-        if (idx !== -1) userSongTracker[chKey][userKey].splice(idx, 1);
+        const failIdx = userSongTracker[chKey][userKey].findIndex(s => s.uri === track.uri || s === placeholder);
+        if (failIdx !== -1) userSongTracker[chKey][userKey].splice(failIdx, 1);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
