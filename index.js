@@ -835,6 +835,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const userKey = username.toLowerCase();
       const limitKey = `${chKey}:${userKey}`;
       const userPending = songLimitMap.get(limitKey) || 0;
+      console.log(`[limit debug] key="${limitKey}" pending=${userPending} mapSize=${songLimitMap.size} allKeys=${JSON.stringify([...songLimitMap.keys()])}`);
 
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
