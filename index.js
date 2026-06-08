@@ -753,91 +753,60 @@ async function getSpotifyToken(channelName) {
 }
 
   // ── Spotify ──
-// Cola propia de Muffet — { channelName: [{ uri, trackName, artistName, requestedBy, addedAt, sentToSpotify }] }
-const muffetQueue = {};
+// Rastreo de canciones pedidas por usuario — { channelName: { username: [uri, uri, ...] } }
+const userSongTracker = {};
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
-// Track actualmente sonando por canal — para detectar cuando cambia
-const nowPlayingTrack = {}; // { channelName: uri }
+const nowPlayingUri = {}; // { channelName: uri } — para detectar cambios
 
-// ── Monitor de cola — cada 5 segundos ──
-async function processSpotifyQueues() {
-  for (const channelName of Object.keys(muffetQueue)) {
-    const queue = muffetQueue[channelName];
-    if (!queue || queue.length === 0) continue;
+// ── Monitor — cada 8 segundos detecta cambio de canción y reduce contadores ──
+async function trackNowPlaying() {
+  for (const channelName of Object.keys(userSongTracker)) {
     try {
       const token = await getSpotifyToken(channelName);
       if (!token) continue;
-
-      // Ver qué suena ahora
-      const nowRes = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+      const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      let currentUri = null;
-      if (nowRes.status === 200) {
-        const nowData = await nowRes.json();
-        currentUri = nowData?.item?.uri;
-      }
+      if (res.status !== 200) continue;
+      const data = await res.json();
+      const currentUri = data?.item?.uri;
+      if (!currentUri) continue;
 
-      // Ver cola de Spotify
-      const qRes = await fetch('https://api.spotify.com/v1/me/player/queue', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const qData = qRes.ok ? await qRes.json() : null;
-      const spotifyQueueUris = new Set([
-        ...(qData?.queue || []).map(t => t.uri),
-        ...(currentUri ? [currentUri] : [])
-      ]);
-
-      // Detectar canciones de la cola de Muffet que ya pasaron
-      // Una canción "pasó" si fue enviada a Spotify y ya no está en la cola ni sonando
-      muffetQueue[channelName] = queue.filter(item => {
-        if (!item.sentToSpotify) return true; // aún no enviada, mantener
-        if (spotifyQueueUris.has(item.uri)) return true; // aún en cola de Spotify, mantener
-        // Ya no está en Spotify — pasó o fue saltada
-        console.log(`[music] ${item.trackName} de @${item.requestedBy} completada en #${channelName}`);
-        return false;
-      });
-
-      // Enviar canciones pendientes a Spotify (máx 3 en la cola de Spotify a la vez)
-      const pendingSend = muffetQueue[channelName].filter(i => !i.sentToSpotify);
-      const spotifyQueueSize = (qData?.queue || []).length;
-      const slotsAvailable = Math.max(0, 3 - spotifyQueueSize);
-
-      console.log(`[music monitor] #${channelName} — pendientes: ${pendingSend.length}, cola Spotify: ${spotifyQueueSize}, slots: ${slotsAvailable}`);
-
-      for (let i = 0; i < Math.min(pendingSend.length, slotsAvailable); i++) {
-        const item = pendingSend[i];
-        const addRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(item.uri)}`, {
-          method: 'POST', headers: { 'Authorization': `Bearer ${token}` }
-        });
-        console.log(`[music monitor] Intento agregar "${item.trackName}" → status ${addRes.status}`);
-        if (addRes.status === 204 || addRes.status === 200) {
-          item.sentToSpotify = true;
-          console.log(`[music] ✅ Enviado a Spotify: ${item.trackName} de @${item.requestedBy} en #${channelName}`);
-        } else {
-          const errText = await addRes.text().catch(() => '');
-          console.error(`[music] ❌ Error al agregar a Spotify: ${addRes.status} ${errText}`);
+      // Si cambió la canción, buscar si era de algún usuario y reducir su contador
+      if (nowPlayingUri[channelName] && nowPlayingUri[channelName] !== currentUri) {
+        const prevUri = nowPlayingUri[channelName];
+        for (const user of Object.keys(userSongTracker[channelName] || {})) {
+          const songs = userSongTracker[channelName][user];
+          const idx = songs.indexOf(prevUri);
+          if (idx !== -1) {
+            songs.splice(idx, 1);
+            console.log(`[music] Canción de @${user} completada en #${channelName} — le quedan ${songs.length}`);
+            break;
+          }
         }
       }
-    } catch(e) {
-      console.error(`[music monitor] Error en #${channelName}:`, e.message);
-    }
+      nowPlayingUri[channelName] = currentUri;
+    } catch(e) {}
   }
 }
 
-setInterval(processSpotifyQueues, 5000);
+setInterval(trackNowPlaying, 8000);
 const spamTracker = {}; // { channelName: { username: { msgs: [], lastMsg: '' } } }
 const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
   if (firstWord === '!cola' || firstWord === '!queue') {
     try {
-      const chKey = channelName.replace('#','').toLowerCase();
-      const queue = muffetQueue[chKey] || [];
+      const token = await getSpotifyToken(channelName);
+      if (!token) return;
+      const r = await fetch('https://api.spotify.com/v1/me/player/queue', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!r.ok) { client.say(channel, `@${username} No se pudo obtener la cola~ 🎵`); return; }
+      const data = await r.json();
+      const queue = data.queue?.slice(0, 5) || [];
       if (!queue.length) { client.say(channel, '🎵 La cola está vacía~ 🎵'); return; }
-      const list = queue.slice(0, 5).map((t, i) =>
-        `${i+1}. ${t.trackName} — ${t.artistName} (@${t.requestedBy})`
-      ).join(' | ');
-      client.say(channel, `🎵 Cola (${queue.length}): ${list} 🎵`);
+      const list = queue.map((t, i) => `${i+1}. ${t.name} — ${t.artists[0].name}`).join(' | ');
+      client.say(channel, `🎵 Cola: ${list} 🎵`);
     } catch(e) { client.say(channel, `@${username} Error al obtener la cola~ 🎵`); }
     return;
   }
@@ -890,9 +859,10 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const chKey = channelName.replace('#','').toLowerCase();
       const userKey = username.toLowerCase();
 
-      // Contar canciones pendientes del usuario en la cola de Muffet
-      if (!muffetQueue[chKey]) muffetQueue[chKey] = [];
-      const userPending = muffetQueue[chKey].filter(i => i.requestedBy === userKey).length;
+      // Verificar límite por usuario
+      if (!userSongTracker[chKey]) userSongTracker[chKey] = {};
+      if (!userSongTracker[chKey][userKey]) userSongTracker[chKey][userKey] = [];
+      const userPending = userSongTracker[chKey][userKey].length;
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         return;
@@ -961,23 +931,19 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return;
       }
 
-      // Agregar a la cola de Muffet (no directo a Spotify)
-      muffetQueue[chKey].push({
-        uri: track.uri,
-        trackName: track.name,
-        artistName: track.artists[0].name,
-        requestedBy: userKey,
-        addedAt: Date.now(),
-        sentToSpotify: false,
+      // Agregar directo a Spotify + rastrear para el límite
+      userSongTracker[chKey][userKey].push(track.uri);
+      if (nowPlayingUri[chKey] === undefined) nowPlayingUri[chKey] = null;
+
+      const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
-      const newPending = muffetQueue[chKey].filter(i => i.requestedBy === userKey).length;
-      const remaining = maxPerUser - newPending;
-      const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
-
-      // Simular queueRes exitoso para el historial
-      const queueRes = { status: 204 };
-      if (true) {
+      if (queueRes.status === 204 || queueRes.status === 200) {
+        const newPending = userSongTracker[chKey][userKey].length;
+        const remaining = maxPerUser - newPending;
+        const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
 
         // Guardar en historial
@@ -988,7 +954,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           const spotifyConfig = histData?.[0]?.spotify_config || {};
           const history = spotifyConfig.history || [];
           history.unshift({ name: track.name, artist: track.artists[0].name, image: track.album?.images?.[1]?.url || '', requester: username.toLowerCase(), requestedAt: new Date().toISOString() });
-          if (history.length > 20) history.pop(); // Max 20 entradas
+          if (history.length > 20) history.pop();
           await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
             method: 'PATCH',
             headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -996,6 +962,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           });
         } catch(e) {}
       } else {
+        // Revertir tracker si falló
+        const idx = userSongTracker[chKey][userKey].indexOf(track.uri);
+        if (idx !== -1) userSongTracker[chKey][userKey].splice(idx, 1);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
     } catch(e) { client.say(channel, `@${username} Error con Spotify~ 🎵`); }
