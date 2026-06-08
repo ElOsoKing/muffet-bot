@@ -758,46 +758,9 @@ async function getSpotifyToken(channelName) {
 const songLimitMap = new Map();
 const activeSongRequests = new Set(); // Mutex
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
-const nowPlayingUri = {}; // { channelName: uri } — para detectar cambios
 
-// ── Monitor — cada 10 segundos compara userSongTracker con cola real de Spotify ──
-async function trackNowPlaying() {
-  for (const channelName of Object.keys(userSongTracker)) {
-    try {
-      const token = await getSpotifyToken(channelName);
-      if (!token) continue;
 
-      // Obtener cola actual de Spotify + canción sonando
-      const [qRes, nowRes] = await Promise.all([
-        fetch('https://api.spotify.com/v1/me/player/queue', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${token}` } })
-      ]);
-
-      const qData = qRes.ok ? await qRes.json() : null;
-      const nowData = nowRes.status === 200 ? await nowRes.json() : null;
-
-      // URIs que aún están en Spotify (cola + sonando ahora)
-      const activeUris = new Set([
-        ...(qData?.queue || []).map(t => t.uri),
-        ...(nowData?.item?.uri ? [nowData.item.uri] : [])
-      ]);
-
-      // Limpiar solo canciones cuya duración ya pasó — NO usar activeUris para no borrar prematuramente
-      for (const user of Object.keys(userSongTracker[channelName] || {})) {
-        const before = userSongTracker[channelName][user].length;
-        userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(s => {
-          if (s.uri.startsWith('pending_')) return true; // nunca borrar placeholders
-          const minTime = Math.max(s.durationMs || 240000, 3 * 60 * 1000); // mínimo 3 minutos
-          return Date.now() - s.addedAt < minTime + 30000;
-        });
-        const after = userSongTracker[channelName][user].length;
-        if (after !== before) console.log(`[music] @${user} #${channelName}: ${before} → ${after} canciones`);
-      }
-    } catch(e) {}
-  }
-}
-
-setInterval(trackNowPlaying, 10000);
+// El límite se libera automáticamente con setTimeout en cada canción — no necesita monitor
 const spamTracker = {}; // { channelName: { username: { msgs: [], lastMsg: '' } } }
 const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
