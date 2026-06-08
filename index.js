@@ -780,10 +780,13 @@ async function trackNowPlaying() {
         ...(nowData?.item?.uri ? [nowData.item.uri] : [])
       ]);
 
-      // Para cada usuario, filtrar solo las canciones que siguen en Spotify
+      const SIX_MIN_MS = 6 * 60 * 1000;
+      // Para cada usuario, eliminar canciones que ya no están en Spotify O que tienen más de 6 min
       for (const user of Object.keys(userSongTracker[channelName] || {})) {
         const before = userSongTracker[channelName][user].length;
-        userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(uri => activeUris.has(uri));
+        userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(s =>
+          activeUris.has(s.uri) && (Date.now() - s.addedAt < SIX_MIN_MS)
+        );
         const after = userSongTracker[channelName][user].length;
         if (after < before) {
           console.log(`[music] @${user} en #${channelName}: ${before} → ${after} canciones pendientes`);
@@ -862,9 +865,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const chKey = channelName.replace('#','').toLowerCase();
       const userKey = username.toLowerCase();
 
-      // Verificar límite por usuario
+      // Verificar límite por usuario — limpiar entradas viejas (más de 6 min = ya sonaron)
       if (!userSongTracker[chKey]) userSongTracker[chKey] = {};
       if (!userSongTracker[chKey][userKey]) userSongTracker[chKey][userKey] = [];
+      const SIX_MIN = 6 * 60 * 1000;
+      userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s => Date.now() - s.addedAt < SIX_MIN);
       const userPending = userSongTracker[chKey][userKey].length;
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
@@ -935,7 +940,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       }
 
       // Agregar directo a Spotify + rastrear para el límite
-      userSongTracker[chKey][userKey].push(track.uri);
+      userSongTracker[chKey][userKey].push({ uri: track.uri, addedAt: Date.now() });
       if (nowPlayingUri[chKey] === undefined) nowPlayingUri[chKey] = null;
 
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
@@ -966,7 +971,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         } catch(e) {}
       } else {
         // Revertir tracker si falló
-        const idx = userSongTracker[chKey][userKey].indexOf(track.uri);
+        const idx = userSongTracker[chKey][userKey].findIndex(s => s.uri === track.uri);
         if (idx !== -1) userSongTracker[chKey][userKey].splice(idx, 1);
         client.say(channel, `@${username} No se pudo agregar — ¿Spotify está reproduciendo? 🎵`);
       }
