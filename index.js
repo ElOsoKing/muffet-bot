@@ -781,15 +781,15 @@ async function trackNowPlaying() {
         ...(nowData?.item?.uri ? [nowData.item.uri] : [])
       ]);
 
-      // Para cada usuario, eliminar canciones que ya no están en Spotify O cuya duración ya pasó
+      // Limpiar solo canciones cuya duración ya pasó — NO usar activeUris para no borrar prematuramente
       for (const user of Object.keys(userSongTracker[channelName] || {})) {
         const before = userSongTracker[channelName][user].length;
         userSongTracker[channelName][user] = userSongTracker[channelName][user].filter(s => {
-          if (s.uri.startsWith('pending_')) return true; // mantener placeholders
-          return activeUris.has(s.uri) && (Date.now() - s.addedAt < s.durationMs + 30000);
+          if (s.uri.startsWith('pending_')) return true; // nunca borrar placeholders
+          return Date.now() - s.addedAt < s.durationMs + 30000; // solo borrar si ya pasó su duración
         });
         const after = userSongTracker[channelName][user].length;
-        console.log(`[music monitor clean] @${user} #${channelName}: ${before} → ${after} | entries: ${JSON.stringify(userSongTracker[channelName][user].map(s=>s.uri.startsWith('pending_')?'PLACEHOLDER':s.uri.slice(-8)))}`);
+        if (after !== before) console.log(`[music] @${user} #${channelName}: ${before} → ${after} canciones`);
       }
     } catch(e) {}
   }
