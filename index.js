@@ -1555,7 +1555,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       ['clip', '!clip'], ['redes', '!redes'], ['puntos', '!puntos'],
       ['top', '!top'], ['apostar', '!apostar'], ['canjear', '!canjear'], ['duelo', '!duelo'],
       ['sorteo', '!sorteo'], ['random', '!random'], ['ask', '!ask'],
-      ['chiste', '!chiste'], ['bola8', '!8ball'], ['poll', '!poll'], ['cancion', '!cancion'],
+      ['bola8', '!8ball'], ['poll', '!poll'], ['cancion', '!cancion'],
       ['primerin', '!' + (channelConfigs[channelName]?.primerin_config?.command || 'primerin')],
       ['primerin', '!toprimerin'],
     ].filter(([id]) => sys[id] !== false).map(([, cmd]) => cmd);
@@ -2036,23 +2036,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     return;
   }
 
-  // ── !chiste ──
-  if (firstWord === '!chiste' || firstWord === '!joke') {
-    if (!isSysCmdEnabled(channelName, 'chiste')) return;
-    if (hasUserCooldown(channelName, `chiste_${username}`) && !isMod(tags, channelName)) {
-      const secs = getCooldownRemaining(channelName, `chiste_${username}`);
-      client.say(channel, `@${username} Espera ${secs}s antes de pedir otro chiste~ 🕷️`);
-      return;
-    }
-    setUserCooldown(channelName, `chiste_${username}`);
-    const tema = message.trim().slice(firstWord.length).trim();
-    const prompt = tema
-      ? `Cuenta un chiste corto, coherente y gracioso sobre "${tema}". El chiste debe tener una estructura clara: pregunta y respuesta, o una situación con remate. Debe ser entendible y tener sentido. Solo el chiste, sin introducción. Máximo 3 oraciones.`
-      : `Cuenta un chiste corto, coherente y gracioso. El chiste debe tener una estructura clara: pregunta y respuesta, o una situación con remate. Debe ser entendible y tener sentido. Solo el chiste, sin introducción. Máximo 3 oraciones.`;
-    const response = await getMuffetResponse(channelName, prompt, username);
-    botSay(client, channel, response);
-    return;
-  }
+
 
   if (firstWord === '!ask' || firstWord === '!pregunta') {
     if (!isSysCmdEnabled(channelName, 'ask')) return;
