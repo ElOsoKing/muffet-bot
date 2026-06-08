@@ -789,9 +789,7 @@ async function trackNowPlaying() {
           return activeUris.has(s.uri) && (Date.now() - s.addedAt < s.durationMs + 30000);
         });
         const after = userSongTracker[channelName][user].length;
-        if (after < before) {
-          console.log(`[music] @${user} en #${channelName}: ${before} → ${after} canciones pendientes`);
-        }
+        console.log(`[music monitor clean] @${user} #${channelName}: ${before} → ${after} | entries: ${JSON.stringify(userSongTracker[channelName][user].map(s=>s.uri.startsWith('pending_')?'PLACEHOLDER':s.uri.slice(-8)))}`);
       }
     } catch(e) {}
   }
