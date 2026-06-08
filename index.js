@@ -870,8 +870,8 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const userKey = username.toLowerCase();
 
       // Verificar límite por usuario — limpiar entradas viejas (más de 6 min = ya sonaron)
-      if (!userSongTracker[chKey]) userSongTracker[chKey] = {};
-      if (!userSongTracker[chKey][userKey]) userSongTracker[chKey][userKey] = [];
+      if (!userSongTracker[chKey]) { console.log(`[INIT CHANNEL] ${chKey}`); userSongTracker[chKey] = {}; }
+      if (!userSongTracker[chKey][userKey]) { console.log(`[INIT USER] ${chKey}/${userKey} — antes tenía: ${JSON.stringify(userSongTracker[chKey])}`); userSongTracker[chKey][userKey] = []; }
       // Limpiar canciones cuya duración ya pasó (ignorar placeholders)
       userSongTracker[chKey][userKey] = userSongTracker[chKey][userKey].filter(s => {
         if (s.uri.startsWith('pending_')) return true;
