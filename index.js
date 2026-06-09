@@ -617,6 +617,7 @@ async function handleMessage(client, channel, tags, message, self) {
       if (!isViewbot && !isCommand && !isBroadcaster) {
         setTimeout(async () => {
           try {
+            if (!canAiRespond(channelName)) return;
             const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
             botSay(client, channel, welcomeMsg, true);
           } catch(e) {
@@ -755,6 +756,18 @@ async function getSpotifyToken(channelName) {
   // ── Spotify ──
 // Mutex — evita race conditions en !cancion
 const activeSongRequests = new Set();
+
+// Cooldown global de IA por canal — evita spam en raids y eventos masivos
+const aiGlobalCooldown = {}; // { channelName: lastResponseTime }
+const AI_GLOBAL_COOLDOWN_MS = 4000; // 4 segundos entre respuestas de IA
+
+function canAiRespond(channelName) {
+  const now = Date.now();
+  const last = aiGlobalCooldown[channelName] || 0;
+  if (now - last < AI_GLOBAL_COOLDOWN_MS) return false;
+  aiGlobalCooldown[channelName] = now;
+  return true;
+}
 
 // ── Monitor — Spotify como fuente de verdad (Gemini approach) ──
 async function trackNowPlaying() {
@@ -2101,6 +2114,7 @@ function setupEvents(client) {
   client.on('raided', async (channel, username, viewers) => {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
+    if (!canAiRespond(ch)) return;
     const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username);
     botSay(client, channel, msg, true);
   });
@@ -2109,6 +2123,7 @@ function setupEvents(client) {
     const ch = channel.replace('#','');
     if (muffetActiveMap[ch] === false) return;
     const tier = methods?.plan === '3000' ? 'Tier 3' : methods?.plan === '2000' ? 'Tier 2' : 'Tier 1';
+    if (!canAiRespond(ch)) return;
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username);
     botSay(client, channel, msg, true);
   });
