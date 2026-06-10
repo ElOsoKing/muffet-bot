@@ -1004,6 +1004,82 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     return;
   }
 
+  // ── !yt — solicitar canción de YouTube ──
+  if (firstWord === '!yt' || firstWord === '!youtube') {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const streamer = data?.[0];
+      const ytConfig = streamer?.youtube_config || {};
+
+      if (!ytConfig.enabled) return;
+
+      // Permisos
+      const allowed = ytConfig.allowed || ['everyone'];
+      if (!allowed.includes('everyone')) {
+        const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+        const isVIP = !!tags.badges?.vip;
+        const isModerator = isMod(tags, channelName);
+        const canUse = (allowed.includes('sub') && isSub) || (allowed.includes('vip') && isVIP) || (allowed.includes('mod') && isModerator) || isModerator;
+        if (!canUse) { client.say(channel, `@${username} No tienes permiso para pedir canciones de YouTube~ 🕷️`); return; }
+      }
+
+      const query = message.trim().slice(firstWord.length).trim();
+      if (!query) { client.say(channel, `@${username} Escribe el nombre de la canción: !yt nombre de la canción~ 🎵`); return; }
+
+      // Límite por usuario
+      const maxPerUser = ytConfig.max_per_user || 3;
+      const chKey = channelName.replace('#','').toLowerCase();
+      const userKey = username.toLowerCase();
+      const ytLimits = ytConfig.song_limits || {};
+      const userSongs = Array.isArray(ytLimits[userKey]) ? ytLimits[userKey] : [];
+      if (userSongs.length >= maxPerUser) {
+        client.say(channel, `@${username} Tienes ${userSongs.length}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
+        return;
+      }
+
+      // Buscar en YouTube
+      const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+      if (!YOUTUBE_API_KEY) { client.say(channel, `@${username} YouTube no está configurado~ 🕷️`); return; }
+
+      const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=5&videoCategoryId=10&key=${YOUTUBE_API_KEY}`);
+      const searchData = await searchRes.json();
+      const items = searchData.items || [];
+      if (!items.length) { client.say(channel, `@${username} No encontré esa canción en YouTube~ 🎵`); return; }
+
+      const video = items[0];
+      const videoId = video.id.videoId;
+      const title = video.snippet.title;
+      const channelTitle = video.snippet.channelTitle;
+
+      // Blacklist
+      const blacklist = ytConfig.blacklist || [];
+      const isBlocked = blacklist.some(b => title.toLowerCase().includes(b.toLowerCase()) || channelTitle.toLowerCase().includes(b.toLowerCase()));
+      if (isBlocked) { client.say(channel, `@${username} Esa canción está en la lista negra~ 🕷️`); return; }
+
+      // Agregar a la cola en Supabase
+      const queue = ytConfig.queue || [];
+      queue.push({ videoId, title, channelTitle, requestedBy: userKey, addedAt: Date.now() });
+
+      // Actualizar límite
+      userSongs.push({ uri: videoId, addedAt: Date.now(), durationMs: 240000 });
+      ytLimits[userKey] = userSongs;
+
+      const remaining = maxPerUser - userSongs.length;
+      const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
+
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtube_config: { ...ytConfig, queue, song_limits: ytLimits } })
+      });
+
+      client.say(channel, `🎵 ¡@${username} agregó "${title}"!${remainingMsg} 🎶`);
+    } catch(e) { client.say(channel, `@${username} Error al buscar en YouTube~ 🎵`); }
+    return;
+  }
+
   if (firstWord === '!skip') {
     if (!isMod(tags, channelName)) return;
     if (!isPro(channelName)) { proOnly(client, channel, username); return; }
