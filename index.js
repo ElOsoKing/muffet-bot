@@ -1039,19 +1039,34 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return;
       }
 
-      // Buscar en YouTube
+      // Buscar en YouTube (link directo o búsqueda por nombre)
       const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
       if (!YOUTUBE_API_KEY) { client.say(channel, `@${username} YouTube no está configurado~ 🕷️`); return; }
 
-      const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=5&videoCategoryId=10&key=${YOUTUBE_API_KEY}`);
-      const searchData = await searchRes.json();
-      const items = searchData.items || [];
-      if (!items.length) { client.say(channel, `@${username} No encontré esa canción en YouTube~ 🎵`); return; }
+      let videoId, title, channelTitle;
 
-      const video = items[0];
-      const videoId = video.id.videoId;
-      const title = video.snippet.title;
-      const channelTitle = video.snippet.channelTitle;
+      // Detectar si es un link de YouTube
+      const ytLinkMatch = query.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
+      if (ytLinkMatch) {
+        videoId = ytLinkMatch[1];
+        // Obtener info del video por ID
+        const infoRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${YOUTUBE_API_KEY}`);
+        const infoData = await infoRes.json();
+        const video = infoData.items?.[0];
+        if (!video) { client.say(channel, `@${username} No encontré ese video~ 🎵`); return; }
+        title = video.snippet.title;
+        channelTitle = video.snippet.channelTitle;
+      } else {
+        // Búsqueda por nombre
+        const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=5&key=${YOUTUBE_API_KEY}`);
+        const searchData = await searchRes.json();
+        const items = searchData.items || [];
+        if (!items.length) { client.say(channel, `@${username} No encontré esa canción en YouTube~ 🎵`); return; }
+        const video = items[0];
+        videoId = video.id.videoId;
+        title = video.snippet.title;
+        channelTitle = video.snippet.channelTitle;
+      }
 
       // Blacklist
       const blacklist = ytConfig.blacklist || [];
