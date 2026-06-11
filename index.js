@@ -2021,108 +2021,32 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   }
 
   // ── !yt ──
-  if (firstWord === '!yt' || firstWord === '!youtube') {
-    if (!isSysCmdEnabled(channelName, 'yt')) return;
-    try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const streamer = data?.[0];
-      const ytConfig = streamer?.youtube_music_config || {};
-
-      if (!ytConfig.enabled) return;
-
-      // Verificar permisos
-      const allowed = ytConfig.allowed || ['everyone'];
-      if (!allowed.includes('everyone')) {
-        const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
-        const isVIP = !!tags.badges?.vip;
-        const isModUser = isMod(tags, channelName);
-        const canUse = (allowed.includes('sub') && isSub) || (allowed.includes('vip') && isVIP) || (allowed.includes('mod') && isModUser) || isModUser;
-        if (!canUse) {
-          const reqLabels = { sub:'suscriptores', vip:'VIPs', mod:'moderadores' };
-          client.say(channel, `@${username} Solo ${allowed.map(p=>reqLabels[p]||p).join(' y ')} pueden pedir canciones~ 🎵`);
-          return;
-        }
-      }
-
-      const query = message.trim().slice(firstWord.length).trim();
-      if (!query) { client.say(channel, `@${username} Uso: !yt nombre o !yt https://youtube.com/watch?v=... 🎵`); return; }
-
-      // Verificar límite por usuario
-      const maxPerUser = ytConfig.max_per_user || 3;
-      const queue = streamer.youtube_music_config?.queue || [];
-      const userRequests = queue.filter(v => v.requester === username.toLowerCase()).length;
-      if (userRequests >= maxPerUser && !isMod(tags, channelName)) {
-        client.say(channel, `@${username} Ya pediste ${userRequests}/${maxPerUser} videos~ Espera a que suenen 🎵`);
-        return;
-      }
-
-      let videoId = null;
-      let videoTitle = null;
-      let videoThumb = null;
-
-      // Detectar si es un link de YouTube
-      const ytMatch = query.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-      if (ytMatch) {
-        videoId = ytMatch[1];
-        // Obtener info via oEmbed (sin API key)
-        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://youtube.com/watch?v=${videoId}&format=json`);
-        if (oembedRes.ok) {
-          const oembedData = await oembedRes.json();
-          videoTitle = oembedData.title;
-          videoThumb = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
-        }
-      } else {
-        // Buscar por nombre
-        const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-        if (!YOUTUBE_API_KEY) { client.say(channel, `@${username} YouTube no está configurado~ 🎵`); return; }
-        const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=1&videoCategoryId=10&key=${YOUTUBE_API_KEY}`);
-        const searchData = await searchRes.json();
-        const video = searchData.items?.[0];
-        if (!video) { client.say(channel, `@${username} No encontré ese video~ 🎵`); return; }
-        videoId = video.id.videoId;
-        videoTitle = video.snippet.title;
-        videoThumb = video.snippet.thumbnails?.medium?.url;
-      }
-
-      if (!videoId || !videoTitle) { client.say(channel, `@${username} No pude obtener ese video~ 🎵`); return; }
-
-      // Agregar a la cola en Supabase
-      const newItem = { id: Date.now(), videoId, title: videoTitle, thumb: videoThumb, url: `https://youtube.com/watch?v=${videoId}`, requester: username.toLowerCase(), requestedAt: new Date().toISOString() };
-      const newQueue = [...queue, newItem];
-      const newConfig = { ...ytConfig, queue: newQueue };
-
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_music_config: newConfig })
-      });
-
-      const pos = newQueue.length;
-      client.say(channel, `🎵 ¡@${username} agregó "${videoTitle}" a la cola! Posición #${pos} 🎶`);
-    } catch(e) { client.say(channel, `@${username} Error con YouTube~ 🎵`); }
-    return;
-  }
 
   // ── !ytskip ──
   if (firstWord === '!ytskip') {
-    if (!isMod(tags, channelName)) return;
+    if (!isMod(tags, channelName)) { client.say(channel, `@${username} Solo los mods pueden saltar canciones~ 🎵`); return; }
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
-      const ytConfig = data?.[0]?.youtube_music_config || {};
+      const ytConfig = data?.[0]?.youtube_config || {};
       const queue = ytConfig.queue || [];
       if (!queue.length) { client.say(channel, `🎵 La cola de YouTube está vacía~ 🎵`); return; }
       const removed = queue.shift();
+      // Liberar el slot del límite del usuario que pidió la canción
+      const limits = ytConfig.song_limits || {};
+      const requester = removed.requestedBy;
+      if (requester && limits[requester]) {
+        limits[requester] = limits[requester].filter(s => s.uri !== removed.videoId);
+        if (limits[requester].length === 0) delete limits[requester];
+      }
       await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
         method: 'PATCH',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_music_config: { ...ytConfig, queue } })
+        body: JSON.stringify({ youtube_config: { ...ytConfig, queue, song_limits: limits } })
       });
-      client.say(channel, `⏭️ "${removed.title}" eliminado de la cola~ 🎵`);
-    } catch(e) {}
+      client.say(channel, `⏭️ @${username} saltó "${removed.title}"~ 🎵`);
+    } catch(e) { client.say(channel, `@${username} Error al saltar~ 🎵`); }
     return;
   }
 
@@ -2132,11 +2056,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
-      const queue = data?.[0]?.youtube_music_config?.queue || [];
-      if (!queue.length) { client.say(channel, `🎵 La cola está vacía~ 🎵`); return; }
-      const list = queue.slice(0,5).map((v,i) => `${i+1}. ${v.title}`).join(' | ');
-      client.say(channel, `🎵 Cola: ${list} 🎵`);
-    } catch(e) {}
+      const queue = data?.[0]?.youtube_config?.queue || [];
+      if (!queue.length) { client.say(channel, `🎵 La cola de YouTube está vacía~ 🎵`); return; }
+      const list = queue.slice(0,5).map((v,i) => `${i+1}. ${v.title} (@${v.requestedBy||'?'})`).join(' | ');
+      client.say(channel, `▶ Cola YouTube (${queue.length}): ${list} 🎵`);
+    } catch(e) { client.say(channel, `@${username} Error al obtener la cola~ 🎵`); }
     return;
   }
 
