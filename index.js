@@ -1045,6 +1045,12 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
       let videoId, title, channelTitle;
 
+      // Rechazar links de playlists
+      if (query.includes('list=') && !query.includes('watch?v=')) {
+        client.say(channel, `@${username} Ese es un link de playlist — por favor pon el link de una canción individual 🎵`);
+        return;
+      }
+
       // Detectar si es un link de YouTube
       const ytLinkMatch = query.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
       if (ytLinkMatch) {
