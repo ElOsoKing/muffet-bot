@@ -564,11 +564,11 @@ async function handleMessage(client, channel, tags, message, self) {
       body: JSON.stringify({ on_off_ai: true })
     }).catch(() => {});
     let onMsg;
-    if (config.on_off_ai !== false) {
-      onMsg = await getMuffetResponse(channelName, 'Anuncia brevemente que acabas de activarte y estás lista para interactuar con el chat. Habla en primera persona según tu personalidad.', username);
-    } else {
-      onMsg = config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥';
-    }
+    const streamerName = channelName.replace('#','');
+    onMsg = await getMuffetResponse(channelName, 
+      `Acabo de activarme en el chat de ${streamerName}. Saluda al chat con energía usando tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
+      username);
+    if (!onMsg) onMsg = config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥';
     client.say(channel, onMsg);
     return;
   }
@@ -580,11 +580,11 @@ async function handleMessage(client, channel, tags, message, self) {
       body: JSON.stringify({ on_off_ai: false })
     }).catch(() => {});
     let offMsg;
-    if (config.on_off_ai !== false) {
-      offMsg = await getMuffetResponse(channelName, 'Anuncia brevemente que te vas a descansar y te despides del chat. Habla en primera persona según tu personalidad.', username);
-    } else {
-      offMsg = config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥';
-    }
+    const streamerNameOff = channelName.replace('#','');
+    offMsg = await getMuffetResponse(channelName, 
+      `Me voy a descansar del chat de ${streamerNameOff}. Despídete del chat con tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
+      username);
+    if (!offMsg) offMsg = config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥';
     client.say(channel, offMsg);
     return;
   }
