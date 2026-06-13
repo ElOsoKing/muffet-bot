@@ -2029,6 +2029,28 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   // ── !yt ──
 
   // ── !ytskip ──
+  // ── !ytactual — ver qué suena ahora ──
+  if (firstWord === '!ytactual' || firstWord === '!ytnow') {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const ytConfig = data?.[0]?.youtube_config || {};
+      if (!ytConfig.enabled) return;
+      const queue = ytConfig.queue || [];
+      const playlist = ytConfig.playlist_url;
+      if (queue.length > 0) {
+        const current = queue[0];
+        client.say(channel, `▶ Sonando: "${current.title}" pedido por @${current.requestedBy||'?'} 🎵`);
+      } else if (playlist) {
+        client.say(channel, `▶ Sonando la playlist base del streamer 🎵`);
+      } else {
+        client.say(channel, `🎵 No hay nada sonando ahora~ 🎵`);
+      }
+    } catch(e) {}
+    return;
+  }
+
   // ── !ytnext — forzar canción del viewer inmediatamente ──
   if (firstWord === '!ytnext') {
     if (!isMod(tags, channelName)) { client.say(channel, `@${username} Solo los mods pueden usar !ytnext~ 🎵`); return; }
