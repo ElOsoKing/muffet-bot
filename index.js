@@ -2029,6 +2029,26 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   // ── !yt ──
 
   // ── !ytskip ──
+  // ── !ytnext — forzar canción del viewer inmediatamente ──
+  if (firstWord === '!ytnext') {
+    if (!isMod(tags, channelName)) { client.say(channel, `@${username} Solo los mods pueden usar !ytnext~ 🎵`); return; }
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const ytConfig = data?.[0]?.youtube_config || {};
+      const queue = ytConfig.queue || [];
+      if (!queue.length) { client.say(channel, `🎵 No hay canciones de viewers en cola~ 🎵`); return; }
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtube_config: { ...ytConfig, force_next: true } })
+      });
+      client.say(channel, `⏭️ @${username} activó la próxima canción — "${queue[0].title}" sonará ahora~ 🎵`);
+    } catch(e) { client.say(channel, `@${username} Error al cambiar canción~ 🎵`); }
+    return;
+  }
+
   if (firstWord === '!ytskip') {
     if (!isMod(tags, channelName)) { client.say(channel, `@${username} Solo los mods pueden saltar canciones~ 🎵`); return; }
     try {
