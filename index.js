@@ -770,18 +770,41 @@ function canAiRespond(channelName) {
 }
 
 // ── Monitor — Spotify como fuente de verdad (Gemini approach) ──
-async function trackNowPlaying() {
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,spotify_config`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-    const streamers = await res.json();
-    if (!Array.isArray(streamers)) return;
+// Caché local de song_limits — evita consultar Supabase en cada tick
+const songLimitsCache = {}; // { channelName: { limits, lastSync } }
+const LIMITS_CACHE_TTL = 60000; // 1 minuto
 
-    for (const s of streamers) {
-      const channelName = s.twitch_username.toLowerCase();
-      const spotConfig = s.spotify_config || {};
-      const limits = spotConfig.song_limits || {};
-      if (Object.keys(limits).length === 0) continue;
+async function getSongLimitsFromCache(channelName) {
+  const cached = songLimitsCache[channelName];
+  if (cached && Date.now() - cached.lastSync < LIMITS_CACHE_TTL) {
+    return cached;
+  }
+  // Cache expiró — recargar desde Supabase
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=spotify_config&limit=1`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await res.json();
+    const spotConfig = data?.[0]?.spotify_config || {};
+    songLimitsCache[channelName] = { limits: spotConfig.song_limits || {}, spotConfig, lastSync: Date.now() };
+    return songLimitsCache[channelName];
+  } catch(e) { return cached || { limits: {}, spotConfig: {} }; }
+}
+
+// Canales con song_limits activos — solo procesar estos
+const activeSpotifyChannels = new Set();
+
+async function trackNowPlaying() {
+  // Solo procesar canales que tienen song_limits activos en cache
+  if (activeSpotifyChannels.size === 0) return;
+
+  for (const channelName of activeSpotifyChannels) {
+    try {
+      const cached = await getSongLimitsFromCache(channelName);
+      const limits = cached.limits;
+      if (Object.keys(limits).length === 0) {
+        activeSpotifyChannels.delete(channelName);
+        continue;
+      }
 
       const token = await getSpotifyToken(channelName);
       if (!token) continue;
@@ -811,10 +834,8 @@ async function trackNowPlaying() {
             validSongs.push(song);
             spotifyUris.splice(idx, 1);
           } else if (Date.now() - song.addedAt < 30000) {
-            // Canción muy reciente — puede que Spotify aún no la sincronizó
             validSongs.push(song);
           }
-          // Si no cumple ninguna → ya sonó o fue saltada → slot liberado
         }
         if (validSongs.length !== userSongs.length) needsUpdate = true;
         if (validSongs.length > 0) newLimits[user] = validSongs;
@@ -824,15 +845,18 @@ async function trackNowPlaying() {
         await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
           method: 'PATCH',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ spotify_config: { ...spotConfig, song_limits: newLimits } })
+          body: JSON.stringify({ spotify_config: { ...cached.spotConfig, song_limits: newLimits } })
         });
+        // Actualizar cache local
+        songLimitsCache[channelName] = { ...cached, limits: newLimits, lastSync: Date.now() };
+        if (Object.keys(newLimits).length === 0) activeSpotifyChannels.delete(channelName);
         console.log(`[music] Límites actualizados para #${channelName}`);
       }
-    }
-  } catch(e) { console.error('[trackNowPlaying]', e.message); }
+    } catch(e) { console.error('[trackNowPlaying]', e.message); }
+  }
 }
 
-setInterval(trackNowPlaying, 15000);
+setInterval(trackNowPlaying, 20000); // Aumentado a 20s
 const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 
 
@@ -980,6 +1004,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
         console.log(`[limit] ${chKey}:${userKey}: ${userSongs.length}/${maxPerUser}`);
+        // Activar monitoreo para este canal
+        activeSpotifyChannels.add(chKey);
+        if (songLimitsCache[chKey]) songLimitsCache[chKey].limits = limitsObj;
 
         // Guardar en Supabase (límites + historial en una sola llamada)
         try {
