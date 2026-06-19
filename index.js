@@ -1101,6 +1101,23 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         channelTitle = video.snippet.channelTitle;
       }
 
+      // Verificar duración máxima
+      const maxDurationMin = ytConfig.max_duration_min || 10;
+      try {
+        const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`);
+        const detailData = await detailRes.json();
+        const duration = detailData.items?.[0]?.contentDetails?.duration || '';
+        // Parsear ISO 8601 duration (PT1H2M3S)
+        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+        if (match) {
+          const totalMin = (parseInt(match[1]||0) * 60) + parseInt(match[2]||0) + (parseInt(match[3]||0) > 0 ? 1 : 0);
+          if (totalMin > maxDurationMin) {
+            client.say(channel, `@${username} Ese video dura ${totalMin} min — el máximo es ${maxDurationMin} min~ 🎵`);
+            return;
+          }
+        }
+      } catch(e) {}
+
       // Blacklist
       const blacklist = ytConfig.blacklist || [];
       const isBlocked = blacklist.some(b => title.toLowerCase().includes(b.toLowerCase()) || channelTitle.toLowerCase().includes(b.toLowerCase()));
@@ -1484,8 +1501,16 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           client.say(channel, `@${username} El clip se está procesando, revísalo en tu canal de Twitch 🕷️`);
         }
       } else if (clipData.error) {
-        client.say(channel, `@${username} No se pudo crear el clip — el stream debe llevar al menos 90 segundos en vivo 🕷️`);
+        console.log(`[clip] Error para ${channelName}:`, JSON.stringify(clipData));
+        if (clipData.status === 401 || clipData.error === 'Unauthorized') {
+          client.say(channel, `@${username} Sin permisos para crear clips — ZuuRdj necesita reconectar su cuenta en el dashboard 🕷️`);
+        } else if (clipData.status === 404) {
+          client.say(channel, `@${username} No se pudo crear el clip — ¿el stream está en vivo? 🕷️`);
+        } else {
+          client.say(channel, `@${username} No se pudo crear el clip (${clipData.message || clipData.error}) 🕷️`);
+        }
       } else {
+        console.log(`[clip] Respuesta inesperada para ${channelName}:`, JSON.stringify(clipData));
         client.say(channel, `@${username} No se pudo crear el clip — ¿el stream está en vivo? 🕷️`);
       }
     } catch(e) {
