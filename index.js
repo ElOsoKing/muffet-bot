@@ -465,14 +465,12 @@ async function getMuffetResponse(channel, userMessage, username) {
   }
 }
 
-// ── Procesar victoria de Primerin (usado por comando y por canje) ──
+// ── Procesar victoria de Primerin (usado por el comando !primerin) ──
 async function processPrimerinWin(channelName, channel, client, username, pConfig) {
-  const isRewardMode = pConfig.mode === 'reward';
   const today = new Date().toISOString().split('T')[0];
   const usedToday = pConfig.used_today || {};
 
-  // En modo canje confiamos en el límite de Twitch (Max redemptions per stream) — no chequeamos el día
-  if (!isRewardMode && usedToday.date === today) {
+  if (usedToday.date === today) {
     client.say(channel, `🥇 @${usedToday.winner} fue el primero hoy~ 🕷️`);
     return;
   }
@@ -545,51 +543,11 @@ async function handleMessage(client, channel, tags, message, self) {
   chatViewers[channelName].add(username.toLowerCase());
 
   // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
-  if (tags['custom-reward-id'] || tags['msg-id'] === 'highlighted-message') {
-    console.log(`[canje-debug] Mensaje recibido — custom-reward-id: ${tags['custom-reward-id']}, msg-id: ${tags['msg-id']}, message: "${message}"`);
-  }
+  // NOTA: El canje real se procesa vía EventSub en server.js (handleRewardRedemption).
+  // Este bloque solo queda como respaldo si llega vía chat tags (no garantizado).
   if (tags['custom-reward-id']) {
-    const rewardId = tags['custom-reward-id'];
-    const configuredRaffleReward = channelConfigs[channelName]?.raffle_settings?.reward_id;
-    const pConfigRedeem = channelConfigs[channelName]?.primerin_config || {};
-    const configuredPrimerinReward = pConfigRedeem.mode === 'reward' ? pConfigRedeem.reward_id : null;
-    console.log(`[canje] ${username} canjeó reward_id: ${rewardId} | sorteo: ${configuredRaffleReward || 'ninguno'} | primerin: ${configuredPrimerinReward || 'ninguno'}`);
-
-    // Canje de Primerin
-    if (configuredPrimerinReward && rewardId === configuredPrimerinReward) {
-      if (isPro(channelName)) {
-        await processPrimerinWin(channelName, channel, client, username, pConfigRedeem);
-      }
-      return;
-    }
-
-    if (configuredRaffleReward && rewardId === configuredRaffleReward) {
-      // Hay un canje que coincide — agregar al sorteo si está activo
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-        const data = await res.json();
-        const raffle = data?.[0]?.raffle_active || {};
-        if (raffle.active) {
-          const participants = raffle.participants || [];
-          if (!participants.includes(username)) {
-            participants.push(username);
-            await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-              method: 'PATCH',
-              headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ raffle_active: { ...raffle, participants } })
-            });
-            const client2 = customClients[channelName] || mainClient;
-            client2.say(`#${channelName}`, `✅ @${username} ¡Canjeaste tu entrada al sorteo! Somos ${participants.length} participantes 🎉🕷️`);
-            console.log(`[Raffle] ${username} agregado via canje en #${channelName}`);
-          } else {
-            const client2 = customClients[channelName] || mainClient;
-            client2.say(`#${channelName}`, `@${username} ¡Ya estás participando en el sorteo, dearie! 🕷️`);
-          }
-        }
-      } catch(e) { console.error('[Raffle redemption error]', e.message); }
-      return;
-    }
+    const configuredRewardId = channelConfigs[channelName]?.raffle_settings?.reward_id;
+    console.log(`[canje-chat] ${username} canjeó reward_id: ${tags['custom-reward-id']} | configurado: ${configuredRewardId || 'ninguno'}`);
   }
 
   // ── Comandos de control (solo mods) ──
@@ -2509,6 +2467,25 @@ async function handleTwitchEvent(type, event) {
     if (!channel) return;
     const client2 = customClients[channel] || mainClient;
     client2.say(`#${channel}`, `✅ @${username} ¡Canjeaste tu entrada al sorteo! Somos ${count} participantes 🎉🕷️`);
+    return;
+  }
+
+  // ── Ganador de Primerin por canje ──
+  if (type === 'primerin.redemption') {
+    const { channel, username, wins, message } = event;
+    if (!channel) return;
+    const client2 = customClients[channel] || mainClient;
+    let msg;
+    if (message) {
+      msg = message.replace(/\{user\}/g, `@${username}`).replace(/\{wins\}/g, wins);
+    } else {
+      try {
+        msg = await getMuffetResponse(channel, `¡@${username} llegó primero al stream hoy! Lleva ${wins} vez${wins>1?'es':''} siendo el primero. Anúncialo emocionado con tu personalidad.`, username);
+      } catch(e) {
+        msg = `🥇 ¡@${username} fue el primero! Lleva ${wins} victoria${wins>1?'s':''} 🕷️`;
+      }
+    }
+    client2.say(`#${channel}`, msg);
     return;
   }
 
