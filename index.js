@@ -2610,7 +2610,8 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
-        if (data.secret !== BOT_SECRET) { res.writeHead(403); res.end(); return; }
+        if (data.secret !== BOT_SECRET) { console.log(`[event] Secret incorrecto — recibido: "${data.secret}" esperado: "${BOT_SECRET}"`); res.writeHead(403); res.end(); return; }
+        console.log(`[event] Evento recibido: ${data.type}`);
         handleTwitchEvent(data.type, data.event).catch(e => console.error('[event]', e.message));
         res.writeHead(200); res.end('ok');
       } catch(e) { res.writeHead(400); res.end(); }
