@@ -465,6 +465,40 @@ async function getMuffetResponse(channel, userMessage, username) {
   }
 }
 
+// ── Procesar victoria de Primerin (usado por comando y por canje) ──
+async function processPrimerinWin(channelName, channel, client, username, pConfig) {
+  const today = new Date().toISOString().split('T')[0];
+  const usedToday = pConfig.used_today || {};
+
+  if (usedToday.date === today) {
+    client.say(channel, `🥇 @${usedToday.winner} fue el primero hoy~ 🕷️`);
+    return;
+  }
+
+  const ranking = pConfig.ranking || {};
+  ranking[username.toLowerCase()] = (ranking[username.toLowerCase()] || 0) + 1;
+
+  const newConfig = { ...pConfig, ranking, used_today: { date: today, winner: username } };
+  channelConfigs[channelName].primerin_config = newConfig;
+
+  await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+    method: 'PATCH',
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ primerin_config: newConfig })
+  }).catch(() => {});
+
+  const wins = ranking[username.toLowerCase()];
+  const customMsg = pConfig.message || '';
+  let msg;
+  if (customMsg) {
+    msg = customMsg.replace(/\{user\}/g, `@${username}`).replace(/\{wins\}/g, wins);
+  } else {
+    msg = await getMuffetResponse(channelName,
+      `¡@${username} llegó primero al stream hoy! Lleva ${wins} vez${wins>1?'es':''} siendo el primero. Anúncialo emocionado con tu personalidad.`,
+      username);
+  }
+}
+
 // ══════════════════════════════════════════
 //  CLIENTE TMI PRINCIPAL (muffet_osoking)
 // ══════════════════════════════════════════
@@ -510,9 +544,21 @@ async function handleMessage(client, channel, tags, message, self) {
 
   // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
   if (tags['custom-reward-id']) {
-    const configuredRewardId = channelConfigs[channelName]?.raffle_settings?.reward_id;
-    console.log(`[canje] ${username} canjeó reward_id: ${tags['custom-reward-id']} | configurado: ${configuredRewardId || 'ninguno'}`);
-    if (configuredRewardId && tags['custom-reward-id'] === configuredRewardId) {
+    const rewardId = tags['custom-reward-id'];
+    const configuredRaffleReward = channelConfigs[channelName]?.raffle_settings?.reward_id;
+    const pConfigRedeem = channelConfigs[channelName]?.primerin_config || {};
+    const configuredPrimerinReward = pConfigRedeem.mode === 'reward' ? pConfigRedeem.reward_id : null;
+    console.log(`[canje] ${username} canjeó reward_id: ${rewardId} | sorteo: ${configuredRaffleReward || 'ninguno'} | primerin: ${configuredPrimerinReward || 'ninguno'}`);
+
+    // Canje de Primerin
+    if (configuredPrimerinReward && rewardId === configuredPrimerinReward) {
+      if (isPro(channelName)) {
+        await processPrimerinWin(channelName, channel, client, username, pConfigRedeem);
+      }
+      return;
+    }
+
+    if (configuredRaffleReward && rewardId === configuredRaffleReward) {
       // Hay un canje que coincide — agregar al sorteo si está activo
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
@@ -747,7 +793,23 @@ async function getSpotifyToken(channelName) {
         });
         console.log(`🎵 Token de Spotify renovado para ${channelName}`);
         return refreshData.access_token;
+      } else if (refreshData.error === 'invalid_grant') {
+        // Refresh token expirado/revocado — descartar credenciales y marcar desconectado
+        console.log(`🎵 Refresh token inválido para ${channelName} — desconectando Spotify`);
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            spotify_token: null,
+            spotify_refresh: null,
+            spotify_disconnected_reason: 'invalid_grant',
+            spotify_disconnected_at: new Date().toISOString()
+          })
+        });
+        return null;
       }
+      // Otro tipo de error — no descartar credenciales, solo fallar esta vez
+      return null;
     }
     return streamer.spotify_token;
   } catch(e) { return null; }
@@ -900,7 +962,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       if (!spotifyConfig.enabled) return;
 
       const token = await getSpotifyToken(channelName);
-      if (!token) { client.say(channel, `@${username} Spotify no está conectado~ 🎵`); return; }
+      if (!token) { client.say(channel, `@${username} Spotify no está conectado — el streamer debe reconectar su cuenta en el dashboard~ 🎵`); return; }
 
       // Verificar permisos
       const allowed = spotifyConfig.allowed || ['everyone'];
@@ -1966,47 +2028,14 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     return;
   }
 
-  // ── !primerin (comando configurable) ──
+  // ── !primerin (comando configurable) — solo si el modo es 'command' ──
   const pConfig = config.primerin_config || {};
+  const pMode = pConfig.mode || 'command';
   const pCmd = '!' + (pConfig.command || 'primerin').toLowerCase();
-  if (firstWord.toLowerCase() === pCmd) {
+  if (pMode === 'command' && firstWord.toLowerCase() === pCmd) {
     if (!isSysCmdEnabled(channelName, 'primerin')) return;
     if (!isPro(channelName)) { proOnly(client, channel, username); return; }
-    const today = new Date().toISOString().split('T')[0];
-    const usedToday = pConfig.used_today || {};
-
-    // Ya alguien ganó hoy
-    if (usedToday.date === today) {
-      client.say(channel, `🥇 @${usedToday.winner} fue el primero hoy~ 🕷️`);
-      return;
-    }
-
-    // ¡Este usuario es el primero!
-    const ranking = pConfig.ranking || {};
-    ranking[username.toLowerCase()] = (ranking[username.toLowerCase()] || 0) + 1;
-
-    const newConfig = { ...pConfig, ranking, used_today: { date: today, winner: username } };
-    channelConfigs[channelName].primerin_config = newConfig;
-
-    await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ primerin_config: newConfig })
-    }).catch(() => {});
-
-    const wins = ranking[username.toLowerCase()];
-    const customMsg = pConfig.message || '';
-    let msg;
-    if (customMsg) {
-      msg = customMsg
-        .replace(/\{user\}/g, `@${username}`)
-        .replace(/\{wins\}/g, wins);
-    } else {
-      msg = await getMuffetResponse(channelName,
-        `¡@${username} llegó primero al stream hoy! Lleva ${wins} vez${wins>1?'es':''} siendo el primero. Anúncialo emocionado con tu personalidad.`,
-        username);
-    }
-    client.say(channel, msg);
+    await processPrimerinWin(channelName, channel, client, username, pConfig);
     return;
   }
 
