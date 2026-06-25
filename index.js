@@ -11,7 +11,7 @@ const GROQ_API_KEY        = process.env.GROQ_API_KEY;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const BOT_SECRET          = process.env.BOT_SECRET || 'muffetbot-internal-2026';
-const BOT_PORT            = process.env.BOT_PORT || 3001;
+const BOT_PORT            = process.env.PORT || process.env.BOT_PORT || 3001;
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
