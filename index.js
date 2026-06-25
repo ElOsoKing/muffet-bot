@@ -467,10 +467,12 @@ async function getMuffetResponse(channel, userMessage, username) {
 
 // ── Procesar victoria de Primerin (usado por comando y por canje) ──
 async function processPrimerinWin(channelName, channel, client, username, pConfig) {
+  const isRewardMode = pConfig.mode === 'reward';
   const today = new Date().toISOString().split('T')[0];
   const usedToday = pConfig.used_today || {};
 
-  if (usedToday.date === today) {
+  // En modo canje confiamos en el límite de Twitch (Max redemptions per stream) — no chequeamos el día
+  if (!isRewardMode && usedToday.date === today) {
     client.say(channel, `🥇 @${usedToday.winner} fue el primero hoy~ 🕷️`);
     return;
   }
@@ -543,6 +545,9 @@ async function handleMessage(client, channel, tags, message, self) {
   chatViewers[channelName].add(username.toLowerCase());
 
   // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
+  if (tags['custom-reward-id'] || tags['msg-id'] === 'highlighted-message') {
+    console.log(`[canje-debug] Mensaje recibido — custom-reward-id: ${tags['custom-reward-id']}, msg-id: ${tags['msg-id']}, message: "${message}"`);
+  }
   if (tags['custom-reward-id']) {
     const rewardId = tags['custom-reward-id'];
     const configuredRaffleReward = channelConfigs[channelName]?.raffle_settings?.reward_id;
