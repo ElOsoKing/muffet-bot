@@ -1223,10 +1223,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   if (firstWord === '!uptime') {
     if (!isSysCmdEnabled(channelName, 'uptime')) return;
     try {
-      const streamer = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await streamer.json();
-      const token = data?.[0]?.access_token;
+      const token = await getTwitchAppToken();
       if (!token) { client.say(channel, `@${username} No pude obtener el uptime~ 🕷️`); return; }
       const streamRes = await fetch(`https://api.twitch.tv/helix/streams?user_login=${channelName}`,
         { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID } });
