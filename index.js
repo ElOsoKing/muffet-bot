@@ -613,10 +613,16 @@ async function handleMessage(client, channel, tags, message, self) {
     return;
   }
 
-  // ── Saludo nuevo viewer (siempre activo) ──
+  // ── Saludo al chatear por primera vez en el stream actual ──
+  // greetedMap se reinicia cada vez que el canal empieza un nuevo stream (ver checkStreamsLive),
+  // así cada viewer recibe un saludo una vez por stream, no una vez para siempre.
   if (!greetedMap[channelName]) greetedMap[channelName] = new Set();
-  if (!greetedMap[channelName].has(username.toLowerCase())) {
-    greetedMap[channelName].add(username.toLowerCase());
+  const userLowerGreet = username.toLowerCase();
+  const alreadyGreetedThisStream = greetedMap[channelName].has(userLowerGreet);
+
+  if (!alreadyGreetedThisStream) {
+    greetedMap[channelName].add(userLowerGreet);
+    const isReturningViewer = (channelConfigs[channelName]?.viewer_points || {})[userLowerGreet] !== undefined;
 
     if (muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
       const isViewbot = /https?:\/\//i.test(message) ||
@@ -634,7 +640,11 @@ async function handleMessage(client, channel, tags, message, self) {
         setTimeout(async () => {
           try {
             if (!canAiRespond(channelName)) return;
-            const welcomeMsg = await getMuffetResponse(channelName, `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`, username);
+            const welcomeMsg = await getMuffetResponse(channelName,
+              isReturningViewer
+                ? `Saluda brevemente a ${username} que ya es parte del chat y acaba de escribir en este stream. Sé breve y usa tu personalidad.`
+                : `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`,
+              username);
             botSay(client, channel, welcomeMsg, true);
           } catch(e) {
             client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
@@ -2570,27 +2580,42 @@ const streamLiveMap = {}; // { channelName: true/false } — si estaba en vivo
 
 async function checkStreamsLive() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,access_token,live_announcement`,
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,live_announcement,plan`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
     const streamers = await res.json();
-    if (!Array.isArray(streamers)) return;
+    if (!Array.isArray(streamers) || !streamers.length) return;
+
+    const appToken = await getTwitchAppToken();
+    if (!appToken) return;
+
+    // Helix permite hasta 100 user_login por consulta — una sola llamada para todos los canales
+    const channels = streamers.map(s => s.twitch_username?.toLowerCase()).filter(Boolean);
+    const liveByChannel = {};
+    for (let i = 0; i < channels.length; i += 100) {
+      const batch = channels.slice(i, i + 100);
+      const query = batch.map(ch => `user_login=${ch}`).join('&');
+      try {
+        const streamRes = await fetch(`https://api.twitch.tv/helix/streams?${query}`, {
+          headers: { 'Authorization': `Bearer ${appToken}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
+        });
+        const data = await streamRes.json();
+        (data.data || []).forEach(stream => { liveByChannel[stream.user_login.toLowerCase()] = stream; });
+      } catch(e) {}
+    }
 
     for (const s of streamers) {
       const ch = s.twitch_username?.toLowerCase();
-      const liveConfig = s.live_announcement || {};
-      if (!liveConfig.enabled || !s.access_token) continue;
-      if (s.plan !== 'pro') continue; // Solo Pro
+      if (!ch) continue;
+      const stream = liveByChannel[ch];
+      const isLive = !!stream;
 
-      try {
-        const streamRes = await fetch(`https://api.twitch.tv/helix/streams?user_login=${ch}`, {
-          headers: { 'Authorization': `Bearer ${s.access_token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
-        });
-        const data = await streamRes.json();
-        const stream = data.data?.[0];
-        const isLive = !!stream;
+      if (isLive && !streamLiveMap[ch]) {
+        streamLiveMap[ch] = true;
+        greetedMap[ch] = new Set(); // nuevo stream — reiniciar saludos para TODOS los canales (gratis y Pro)
 
-        if (isLive && !streamLiveMap[ch]) {
-          streamLiveMap[ch] = true;
+        // El anuncio en chat solo se manda si tiene la función Pro activada
+        const liveConfig = s.live_announcement || {};
+        if (liveConfig.enabled && s.plan === 'pro') {
           const client = customClients[ch] || mainClient;
           const game = stream.game_name || '?';
           const title = stream.title || '';
@@ -2599,10 +2624,10 @@ async function checkStreamsLive() {
             ? customMsg.replace(/\{game\}/g, game).replace(/\{title\}/g, title).replace(/\{channel\}/g, ch)
             : `🔴 ¡@${ch} está en vivo! 🎮 ${game}${title ? ` — ${title}` : ''} 🕷️👑`;
           client.say(`#${ch}`, msg);
-        } else if (!isLive) {
-          streamLiveMap[ch] = false;
         }
-      } catch(e) {}
+      } else if (!isLive) {
+        streamLiveMap[ch] = false;
+      }
     }
   } catch(e) {}
 }
