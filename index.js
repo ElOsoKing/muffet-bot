@@ -2616,25 +2616,33 @@ async function checkStreamsLive() {
       if (!ch) continue;
       const stream = liveByChannel[ch];
       const isLive = !!stream;
+      if (!isLive) continue;
 
-      if (isLive && !streamLiveMap[ch]) {
-        streamLiveMap[ch] = true;
-        greetedMap[ch] = new Set(); // nuevo stream — reiniciar saludos para TODOS los canales (gratis y Pro)
+      const liveConfig = s.live_announcement || {};
+      // Comparar con la fecha de inicio guardada en Supabase — sobrevive a reinicios del bot.
+      // Si started_at es el mismo de la última vez, NO es un stream nuevo (solo el bot se reinició).
+      if (liveConfig.last_seen_started_at === stream.started_at) continue;
 
-        // El anuncio en chat solo se manda si tiene la función Pro activada
-        const liveConfig = s.live_announcement || {};
-        if (liveConfig.enabled && s.plan === 'pro') {
-          const client = customClients[ch] || mainClient;
-          const game = stream.game_name || '?';
-          const title = stream.title || '';
-          const customMsg = liveConfig.message || '';
-          const msg = customMsg
-            ? customMsg.replace(/\{game\}/g, game).replace(/\{title\}/g, title).replace(/\{channel\}/g, ch)
-            : `🔴 ¡@${ch} está en vivo! 🎮 ${game}${title ? ` — ${title}` : ''} 🕷️👑`;
-          client.say(`#${ch}`, msg);
-        }
-      } else if (!isLive) {
-        streamLiveMap[ch] = false;
+      // Stream genuinamente nuevo — actualizar Supabase para no repetir tras el próximo reinicio
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ live_announcement: { ...liveConfig, last_seen_started_at: stream.started_at } })
+      }).catch(() => {});
+      if (channelConfigs[ch]) channelConfigs[ch].live_announcement = { ...liveConfig, last_seen_started_at: stream.started_at };
+
+      greetedMap[ch] = new Set(); // nuevo stream — reiniciar saludos para TODOS los canales (gratis y Pro)
+
+      // El anuncio en chat solo se manda si tiene la función Pro activada
+      if (liveConfig.enabled && s.plan === 'pro') {
+        const client = customClients[ch] || mainClient;
+        const game = stream.game_name || '?';
+        const title = stream.title || '';
+        const customMsg = liveConfig.message || '';
+        const msg = customMsg
+          ? customMsg.replace(/\{game\}/g, game).replace(/\{title\}/g, title).replace(/\{channel\}/g, ch)
+          : `🔴 ¡@${ch} está en vivo! 🎮 ${game}${title ? ` — ${title}` : ''} 🕷️👑`;
+        client.say(`#${ch}`, msg);
       }
     }
   } catch(e) {}
