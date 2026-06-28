@@ -615,9 +615,15 @@ async function handleMessage(client, channel, tags, message, self) {
   if (firstWord === '!muffetstatus') {
     const active = muffetActiveMap[channelName] !== false;
     const silent = muffetSilentMap[channelName] === true;
-    client.say(channel, active
-      ? (silent ? `🤫 Activa pero en modo silencio — usa !muffethabla para que vuelva a hablar~ 🕷️` : `🟢 La guardiana está activa~ 🕷️♥`)
-      : `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`);
+    let statusMsg;
+    if (!active) {
+      statusMsg = `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`;
+    } else if (silent) {
+      statusMsg = `🤫 Activa pero en modo silencio (no responde raids/subs/regalos/bits) — usa !muffethabla para que vuelva a hablar~ 🕷️`;
+    } else {
+      statusMsg = `🟢 La guardiana está activa y hablando con todos~ 🕷️♥`;
+    }
+    client.say(channel, statusMsg);
     return;
   }
 
@@ -1207,7 +1213,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       });
       skipVotes[channelName] = new Set(); // Resetear votos al saltar
       client.say(channel, `⏭️ Canción saltada~ 🎵`);
-    } catch(e) {}
+    } catch(e) { client.say(channel, `@${username} No se pudo saltar — ¿Spotify está reproduciendo? 🎵`); }
     return;
   }
 
@@ -1928,7 +1934,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         const raffle = data?.[0]?.raffle_active || {};
         if (!raffle.active) { client.say(channel, '🎉 No hay sorteo activo~ 🕷️'); return; }
         client.say(channel, `🎉 Sorteo activo | Premio: ${raffle.prize} | Participantes: ${(raffle.participants||[]).length} 🕷️`);
-      } catch(e) {}
+      } catch(e) { client.say(channel, `@${username} Error al consultar el sorteo~ 🕷️`); }
       return;
     }
   }
@@ -1983,7 +1989,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const entryMsg = entries > 1 ? ` (x${entries} entradas)` : '';
       const participantWord = uniqueCount === 1 ? 'participante' : 'participantes';
       client.say(channel, `✅ @${username} ¡Entraste al sorteo!${entryMsg} Somos ${uniqueCount} ${participantWord} 🎉🕷️`);
-    } catch(e) {}
+    } catch(e) { client.say(channel, `@${username} Error al entrar al sorteo~ 🕷️`); }
     return;
   }
 
@@ -2113,7 +2119,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       } else {
         client.say(channel, `🎵 No hay nada sonando ahora~ 🎵`);
       }
-    } catch(e) {}
+    } catch(e) { client.say(channel, `@${username} Error al consultar la música~ 🎵`); }
     return;
   }
 
