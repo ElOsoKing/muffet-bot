@@ -530,6 +530,14 @@ async function handleMessage(client, channel, tags, message, self) {
   // Solo responder en canales registrados en MuffetBot
   if (!channelConfigs[channelName]) return;
 
+  // ── Chat compartido (Shared Chat) — ignorar mensajes que no son del propio canal ──
+  // Twitch envía 'source-room-id' cuando el mensaje viene de OTRO canal participante
+  // del shared chat. Si no coincide con el room-id de este canal, el mensaje no es
+  // realmente de aquí y no debe disparar comandos, saludos ni respuestas de IA.
+  if (tags['source-room-id'] && tags['room-id'] && tags['source-room-id'] !== tags['room-id']) {
+    return;
+  }
+
   const config = channelConfigs[channelName];
   const username = tags['display-name'] || tags.username;
   const msgLower = message.trim().toLowerCase();
