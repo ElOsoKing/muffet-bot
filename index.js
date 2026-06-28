@@ -2393,6 +2393,9 @@ async function start() {
 
   // Cola anti-spam para auto mensajes
   const autoMsgQueue = {};
+  const lastAutoMsgSentAt = {}; // { ch: timestamp } — para evitar que varios mensajes coincidan
+  const MIN_GAP_BETWEEN_AUTO_MSGS = 5 * 60 * 1000; // 5 minutos mínimo entre cualquier mensaje automático
+
   async function processAutoMsgQueue(ch) {
     if (autoMsgQueue[ch]?.processing) return;
     if (!autoMsgQueue[ch]?.items?.length) return;
@@ -2405,6 +2408,7 @@ async function start() {
       } catch(e) {
         client.say(`#${channelName}`, text).catch(() => {});
       }
+      lastAutoMsgSentAt[ch] = Date.now();
       if (autoMsgQueue[ch].items.length > 0) {
         await new Promise(r => setTimeout(r, 3000));
       }
@@ -2433,22 +2437,30 @@ async function start() {
 
       if (!config.auto_messages?.length) continue;
 
-      config.auto_messages.forEach(msg => {
+      config.auto_messages.forEach((msg, idx) => {
         const text     = typeof msg === 'object' ? msg.text     : msg;
         const interval = typeof msg === 'object' ? msg.interval : (config.auto_message_interval || 20);
         const intervalMs = Math.max(interval, 5) * 60 * 1000;
+        // Escalonar el inicio de cada mensaje para que no coincidan todos al mismo tiempo
+        const staggerDelay = idx * 45 * 1000; // 45s de diferencia entre cada uno al iniciar
 
-        const timer = setInterval(async () => {
-          if (muffetActiveMap[ch] === false) return;
-          if (muffetSilentMap[ch]) return;
-          const lastActivity = lastChatActivity[ch];
-          if (lastActivity && Date.now() - lastActivity > 10 * 60 * 1000) return;
-          if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
-          autoMsgQueue[ch].items.push({ text, channelName: ch });
-          processAutoMsgQueue(ch);
-        }, intervalMs);
+        const startTimer = setTimeout(() => {
+          const timer = setInterval(async () => {
+            if (muffetActiveMap[ch] === false) return;
+            if (muffetSilentMap[ch]) return;
+            const lastActivity = lastChatActivity[ch];
+            if (lastActivity && Date.now() - lastActivity > 10 * 60 * 1000) return;
+            // Respetar gap mínimo entre cualquier mensaje automático de este canal
+            const lastSent = lastAutoMsgSentAt[ch] || 0;
+            if (Date.now() - lastSent < MIN_GAP_BETWEEN_AUTO_MSGS) return;
+            if (!autoMsgQueue[ch]) autoMsgQueue[ch] = { items: [], processing: false };
+            autoMsgQueue[ch].items.push({ text, channelName: ch });
+            processAutoMsgQueue(ch);
+          }, intervalMs);
+          autoMsgIntervals[ch].push(timer);
+        }, staggerDelay);
 
-        autoMsgIntervals[ch].push(timer);
+        autoMsgIntervals[ch].push(startTimer);
       });
     }
   }
