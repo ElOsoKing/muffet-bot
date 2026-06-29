@@ -23,6 +23,8 @@ let muffetActiveMap = {}; // { 'elosoking1': true/false }
 let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvida
 let greetedMap = {}; // { 'elosoking1': Set() }
+let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
+let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
 const chatViewers = {}; // { 'elosoking1': Set() } — viewers que han escrito en el chat
 
@@ -433,6 +435,52 @@ function addToHistory(channelName, role, content) {
   chatHistory[channelName].push({ role, content });
   if (chatHistory[channelName].length > MAX_HISTORY) {
     chatHistory[channelName].shift();
+  }
+}
+
+// ── Generar reto de Emoji Game con IA — llamada aislada, sin tocar el historial de chat ──
+const usedEmojiAnswers = {}; // { channelName: Set(títulos ya usados en esta sesión) } — evitar repetir
+
+async function generateEmojiChallenge(channelName, category) {
+  const categoryPrompts = {
+    pelicula:   'una película muy conocida (Hollywood o animada)',
+    serie:      'una serie de TV muy conocida',
+    videojuego: 'un videojuego muy conocido (cualquier consola o plataforma)',
+    random:     'una película, serie o videojuego muy conocido (elige tú cuál de los tres)'
+  };
+  const categoryText = categoryPrompts[category] || categoryPrompts.random;
+
+  if (!usedEmojiAnswers[channelName]) usedEmojiAnswers[channelName] = new Set();
+  const usedList = Array.from(usedEmojiAnswers[channelName]).slice(-15).join(', ');
+
+  const prompt = `Genera un reto de adivinanza con emojis para un juego de chat de Twitch.
+Elige ${categoryText} MUY conocido y popular (que la mayoría de gente reconocería).
+Representa el título SOLO con 3 a 6 emojis que se traduzcan directamente al título o a su tema principal — NO describas una escena random.
+Ejemplos del estilo correcto: 🕸️🕷️👨 = Spider-Man, 🦁👑 = The Lion King, 🧊👸❄️ = Frozen.
+${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}
+Responde ÚNICAMENTE en este formato exacto, sin texto adicional, sin comillas:
+EMOJIS|||TÍTULO`;
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'system', content: prompt }],
+      max_tokens: 60,
+      temperature: 1.0,
+    });
+    const raw = (completion.choices[0]?.message?.content || '').trim();
+    const [emojis, title] = raw.split('|||').map(s => s?.trim());
+    if (!emojis || !title) return null;
+    usedEmojiAnswers[channelName].add(title.toLowerCase());
+    if (usedEmojiAnswers[channelName].size > 30) {
+      // Limpiar los más viejos para no acumular infinito
+      const arr = Array.from(usedEmojiAnswers[channelName]);
+      usedEmojiAnswers[channelName] = new Set(arr.slice(-20));
+    }
+    return { emojis, title };
+  } catch (err) {
+    console.error('[emojigame] Error generando reto:', err.message);
+    return null;
   }
 }
 
@@ -2017,6 +2065,95 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const list = ranking.map(([user, wins], i) => `${medals[i]} ${user} (${wins}x)`).join(' | ');
     client.say(channel, `🏆 Top Primerin: ${list} 🕷️`);
     return;
+  }
+
+  // ── !emojigame — adivina la película/serie/videojuego con emojis ──
+  if (firstWord === '!emojigame' || firstWord === '!emoji') {
+    if (!isSysCmdEnabled(channelName, 'emojigame')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+
+    if (activeEmojiGames[channelName]) {
+      client.say(channel, `🎮 Ya hay un reto activo: ${activeEmojiGames[channelName].emojis} — ¡adivínalo en el chat! 🕷️`);
+      return;
+    }
+
+    const lastUsed = emojiGameCooldowns[channelName] || 0;
+    if (Date.now() - lastUsed < 20000) return; // 20s anti-spam
+
+    emojiGameCooldowns[channelName] = Date.now();
+
+    const args = message.trim().split(' ');
+    const categoryArg = (args[1] || '').toLowerCase();
+    const category = ['pelicula', 'serie', 'videojuego'].includes(categoryArg) ? categoryArg : 'random';
+
+    client.say(channel, `🎮 Pensando un reto de emojis~ 🕷️`);
+    const challenge = await generateEmojiChallenge(channelName, category);
+    if (!challenge) {
+      client.say(channel, `@${username} No pude generar el reto, intenta de nuevo~ 🕷️`);
+      return;
+    }
+
+    activeEmojiGames[channelName] = {
+      emojis: challenge.emojis,
+      title: challenge.title,
+      startedAt: Date.now(),
+      hintsUsed: 0,
+    };
+
+    client.say(channel, `🎬 ¡Adivina con emojis! ${challenge.emojis} — Escribe tu respuesta en el chat~ (!emojihint para pista, !emojiskip para saltar) 🕷️`);
+    return;
+  }
+
+  // ── !emojihint — dar una pista (revela primera letra de cada palabra) ──
+  if (firstWord === '!emojihint') {
+    if (!isSysCmdEnabled(channelName, 'emojigame')) return;
+    const game = activeEmojiGames[channelName];
+    if (!game) { client.say(channel, `@${username} No hay ningún reto activo~ 🎮`); return; }
+    game.hintsUsed++;
+    const words = game.title.split(' ');
+    const hint = words.map(w => w.length > 2 ? w[0] + '_'.repeat(w.length - 1) : w).join(' ');
+    client.say(channel, `💡 Pista: ${hint} (${words.length} palabra${words.length>1?'s':''}) 🕷️`);
+    return;
+  }
+
+  // ── !emojiskip — saltar el reto actual (mods) ──
+  if (firstWord === '!emojiskip') {
+    if (!isSysCmdEnabled(channelName, 'emojigame')) return;
+    if (!isMod(tags, channelName)) return;
+    const game = activeEmojiGames[channelName];
+    if (!game) { client.say(channel, `@${username} No hay ningún reto activo~ 🎮`); return; }
+    client.say(channel, `⏭️ Reto saltado — era "${game.title}" 🕷️`);
+    delete activeEmojiGames[channelName];
+    return;
+  }
+
+  // ── Verificar si el mensaje es una respuesta correcta al emoji game activo ──
+  if (activeEmojiGames[channelName] && !firstWord.startsWith('!')) {
+    const game = activeEmojiGames[channelName];
+    const normalize = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, '').trim();
+    const guess = normalize(message);
+    const answer = normalize(game.title);
+
+    if (guess === answer || (guess.length > 3 && answer.includes(guess) && guess.length >= answer.length * 0.7)) {
+      delete activeEmojiGames[channelName];
+      const points = Math.max(10, 30 - game.hintsUsed * 10);
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const data = await res.json();
+        const pointsConfig = data?.[0]?.points_config || {};
+        const ranking = pointsConfig.ranking || {};
+        const userKey = username.toLowerCase();
+        ranking[userKey] = (ranking[userKey] || 0) + points;
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ points_config: { ...pointsConfig, ranking } })
+        });
+      } catch(e) {}
+      client.say(channel, `🎉 ¡@${username} adivinó "${game.title}"! +${points} puntos~ 🕷️🎬`);
+      return;
+    }
   }
 
   // ── !primerin (comando configurable) — solo si el modo es 'command' ──
