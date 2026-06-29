@@ -2084,7 +2084,8 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
     const args = message.trim().split(' ');
     const categoryArg = (args[1] || '').toLowerCase();
-    const category = ['pelicula', 'serie', 'videojuego'].includes(categoryArg) ? categoryArg : 'random';
+    const configuredCategory = config.emojigame_config?.category || 'random';
+    const category = ['pelicula', 'serie', 'videojuego'].includes(categoryArg) ? categoryArg : configuredCategory;
 
     client.say(channel, `🎮 Pensando un reto de emojis~ 🕷️`);
     const challenge = await generateEmojiChallenge(channelName, category);
