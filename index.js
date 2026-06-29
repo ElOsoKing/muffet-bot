@@ -453,25 +453,32 @@ async function generateEmojiChallenge(channelName, category) {
   if (!usedEmojiAnswers[channelName]) usedEmojiAnswers[channelName] = new Set();
   const usedList = Array.from(usedEmojiAnswers[channelName]).slice(-15).join(', ');
 
-  const prompt = `Genera un reto de adivinanza con emojis para un juego de chat de Twitch.
-Elige ${categoryText} MUY conocido y popular (que la mayoría de gente reconocería).
-Usa EXACTAMENTE 4 a 6 emojis — nunca menos de 4. Combinaciones de solo 2-3 emojis suelen ser demasiado genéricas y ambiguas (ej. "pez + niño" podría ser cualquier película con un pez, evita eso).
-Cada emoji debe aportar información específica que reduzca las opciones posibles — combina elementos del título, personajes, lugares y temas distintivos para que la respuesta sea identificable pero no obvia desde el primer emoji.
-CRÍTICO: Verifica que cada emoji corresponda EXACTAMENTE al elemento correcto del título (ej. para "El Rey León" usa 🦁 león, NUNCA 🐺 lobo u otro animal).
-Ejemplos del estilo correcto: 🕸️🕷️🏙️👨🦸 = Spider-Man, 🦁👑🌍🎶👶 = The Lion King, 🧊👸❄️⛄🏰 = Frozen.
-${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}
-Responde ÚNICAMENTE en este formato exacto, sin texto adicional, sin comillas:
-EMOJIS|||TÍTULO`;
+  const prompt = `Vas a generar un reto de adivinanza con emojis para un juego de chat de Twitch.
+
+PASO 1 (no lo muestres en la respuesta): Piensa en ${categoryText} MUY conocido y popular.
+
+PASO 2 (no lo muestres): Identifica 4-6 elementos ÚNICOS y DISTINTIVOS de ESE título específico — pueden ser objetos icónicos de la trama, personajes reconocibles, el escenario particular, o eventos clave de la historia. NO uses elementos genéricos que aplican a cualquier película del mismo género (ej. para una película de princesas, NO uses corona/diamante/princesa genéricos — en su lugar usa el elemento ÚNICO de esa historia: para Frozen serían ❄️🧊⛄, para Cenicienta sería 👠🎃🕛, para La Bella y la Bestia sería 🌹🕯️).
+PROHIBIDO usar como relleno genérico: 👑💎🔥 a menos que sean literalmente el objeto central de la trama (ej. el anillo en El Señor de los Anillos).
+
+PASO 3: Verifica que cada emoji elegido sea EXACTO — el objeto/animal/color correcto, no uno similar.
+
+Responde ÚNICAMENTE con esta última línea, sin explicar tu razonamiento, sin comillas, sin texto antes ni después:
+EMOJIS|||TÍTULO
+
+${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}`;
 
   try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'system', content: prompt }],
-      max_tokens: 60,
+      max_tokens: 300,
       temperature: 0.9,
     });
     const raw = (completion.choices[0]?.message?.content || '').trim();
-    const [emojis, title] = raw.split('|||').map(s => s?.trim());
+    // El modelo puede pensar antes de responder — tomar solo la última línea con el formato EMOJIS|||TITULO
+    const lines = raw.split('\n').map(l => l.trim()).filter(l => l.includes('|||'));
+    const lastValidLine = lines[lines.length - 1] || raw;
+    const [emojis, title] = lastValidLine.split('|||').map(s => s?.trim().replace(/^["']|["']$/g, ''));
     if (!emojis || !title) return null;
     usedEmojiAnswers[channelName].add(title.toLowerCase());
     if (usedEmojiAnswers[channelName].size > 30) {
