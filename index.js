@@ -2071,20 +2071,23 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   if (firstWord === '!emojigame' || firstWord === '!emoji') {
     if (!isSysCmdEnabled(channelName, 'emojigame')) return;
     if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+    const egConfig = config.emojigame_config || {};
+    if (egConfig.enabled === false) return;
 
     if (activeEmojiGames[channelName]) {
       client.say(channel, `🎮 Ya hay un reto activo: ${activeEmojiGames[channelName].emojis} — ¡adivínalo en el chat! 🕷️`);
       return;
     }
 
+    const cooldownMs = (egConfig.cooldown_sec ?? 20) * 1000;
     const lastUsed = emojiGameCooldowns[channelName] || 0;
-    if (Date.now() - lastUsed < 20000) return; // 20s anti-spam
+    if (Date.now() - lastUsed < cooldownMs) return;
 
     emojiGameCooldowns[channelName] = Date.now();
 
     const args = message.trim().split(' ');
     const categoryArg = (args[1] || '').toLowerCase();
-    const configuredCategory = config.emojigame_config?.category || 'random';
+    const configuredCategory = egConfig.category || 'random';
     const category = ['pelicula', 'serie', 'videojuego'].includes(categoryArg) ? categoryArg : configuredCategory;
 
     client.say(channel, `🎮 Pensando un reto de emojis~ 🕷️`);
@@ -2137,7 +2140,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
     if (guess === answer || (guess.length > 3 && answer.includes(guess) && guess.length >= answer.length * 0.7)) {
       delete activeEmojiGames[channelName];
-      const points = Math.max(10, 30 - game.hintsUsed * 10);
+      const egConfig2 = config.emojigame_config || {};
+      const basePoints = egConfig2.base_points ?? 30;
+      const hintPenalty = egConfig2.hint_penalty ?? 10;
+      const minPoints = egConfig2.min_points ?? 10;
+      const points = Math.max(minPoints, basePoints - game.hintsUsed * hintPenalty);
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
           { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
