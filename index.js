@@ -1,5 +1,6 @@
 const tmi  = require('tmi.js');
 const Groq = require('groq-sdk');
+const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
 
 // ══════════════════════════════════════════
@@ -14,6 +15,8 @@ const BOT_SECRET          = process.env.BOT_SECRET || 'muffetbot-internal-2026';
 const BOT_PORT            = process.env.PORT || process.env.BOT_PORT || 3001;
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
 // ══════════════════════════════════════════
 //  CONFIG POR CANAL (cargada desde Supabase)
@@ -468,13 +471,23 @@ EMOJIS|||TÍTULO
 ${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}`;
 
   try {
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'system', content: prompt }],
-      max_tokens: 300,
-      temperature: 0.9,
-    });
-    const raw = (completion.choices[0]?.message?.content || '').trim();
+    let raw;
+    if (anthropic) {
+      const completion = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      raw = (completion.content?.[0]?.text || '').trim();
+    } else {
+      const completion = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'system', content: prompt }],
+        max_tokens: 300,
+        temperature: 0.9,
+      });
+      raw = (completion.choices[0]?.message?.content || '').trim();
+    }
     // El modelo puede pensar antes de responder — tomar solo la última línea con el formato EMOJIS|||TITULO
     const lines = raw.split('\n').map(l => l.trim()).filter(l => l.includes('|||'));
     const lastValidLine = lines[lines.length - 1] || raw;
