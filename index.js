@@ -2108,15 +2108,46 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     return;
   }
 
-  // ── !emojihint — dar una pista (revela primera letra de cada palabra) ──
+  // ── !emojihint — dar una pista (cuesta puntos del saldo del usuario) ──
   if (firstWord === '!emojihint') {
     if (!isSysCmdEnabled(channelName, 'emojigame')) return;
     const game = activeEmojiGames[channelName];
     if (!game) { client.say(channel, `@${username} No hay ningún reto activo~ 🎮`); return; }
+
+    const egConfigHint = config.emojigame_config || {};
+    const hintCost = egConfigHint.hint_cost ?? 10;
+    const userKeyHint = username.toLowerCase();
+
+    if (hintCost > 0) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const data = await res.json();
+        const pointsConfig = data?.[0]?.points_config || {};
+        const ranking = pointsConfig.ranking || {};
+        const currentPoints = ranking[userKeyHint] || 0;
+
+        if (currentPoints < hintCost) {
+          client.say(channel, `@${username} Necesitas ${hintCost} puntos para una pista — tienes ${currentPoints}~ 🕷️`);
+          return;
+        }
+
+        ranking[userKeyHint] = currentPoints - hintCost;
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ points_config: { ...pointsConfig, ranking } })
+        });
+      } catch(e) {
+        client.say(channel, `@${username} Error al cobrar la pista~ 🕷️`);
+        return;
+      }
+    }
+
     game.hintsUsed++;
     const words = game.title.split(' ');
     const hint = words.map(w => w.length > 2 ? w[0] + '_'.repeat(w.length - 1) : w).join(' ');
-    client.say(channel, `💡 Pista: ${hint} (${words.length} palabra${words.length>1?'s':''}) 🕷️`);
+    client.say(channel, `💡 @${username} usó ${hintCost} puntos por una pista: ${hint} (${words.length} palabra${words.length>1?'s':''}) 🕷️`);
     return;
   }
 
@@ -2141,10 +2172,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (guess === answer || (guess.length > 3 && answer.includes(guess) && guess.length >= answer.length * 0.7)) {
       delete activeEmojiGames[channelName];
       const egConfig2 = config.emojigame_config || {};
-      const basePoints = egConfig2.base_points ?? 30;
-      const hintPenalty = egConfig2.hint_penalty ?? 10;
-      const minPoints = egConfig2.min_points ?? 10;
-      const points = Math.max(minPoints, basePoints - game.hintsUsed * hintPenalty);
+      const points = egConfig2.base_points ?? 30;
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
           { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
