@@ -458,7 +458,7 @@ async function generateEmojiChallenge(channelName, category) {
 
   const prompt = `Vas a generar un reto de adivinanza con emojis para un juego de chat de Twitch.
 
-PASO 1 (no lo muestres en la respuesta): Piensa en ${categoryText} MUY conocido y popular.
+PASO 1 (no lo muestres en la respuesta): Piensa en ${categoryText} MUY conocido y popular. VARÍA mucho tu elección — no te quedes solo en clásicos animados de Disney/Pixar. Considera también: películas de acción, terror, comedia, ciencia ficción, anime, series de TV de diferentes décadas y géneros, videojuegos de cualquier plataforma (retro, indie, AAA, mobile). Evita repetir el mismo estudio o género dos veces seguidas.
 
 PASO 2 (no lo muestres): Identifica 4-6 elementos ÚNICOS y DISTINTIVOS de ESE título específico — pueden ser objetos icónicos de la trama, personajes reconocibles, el escenario particular, o eventos clave de la historia. NO uses elementos genéricos que aplican a cualquier película del mismo género (ej. para una película de princesas, NO uses corona/diamante/princesa genéricos — en su lugar usa el elemento ÚNICO de esa historia: para Frozen serían ❄️🧊⛄, para Cenicienta sería 👠🎃🕛, para La Bella y la Bestia sería 🌹🕯️).
 PROHIBIDO usar como relleno genérico: 👑💎🔥 a menos que sean literalmente el objeto central de la trama (ej. el anillo en El Señor de los Anillos).
@@ -468,7 +468,7 @@ PASO 3: Verifica que cada emoji elegido sea EXACTO — el objeto/animal/color co
 Responde ÚNICAMENTE con esta última línea, sin explicar tu razonamiento, sin comillas, sin texto antes ni después:
 EMOJIS|||TÍTULO
 
-${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}`;
+${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franquicia de ellos: ${usedList}.` : ''}`;
 
   try {
     let raw;
@@ -2129,7 +2129,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       hintsUsed: 0,
     };
 
-    client.say(channel, `🎬 ¡Adivina con emojis! ${challenge.emojis} — Escribe tu respuesta en el chat~ (!emojihint para pista, !emojiskip para saltar) 🕷️`);
+    const letterCount = challenge.title.replace(/\s/g, '').length;
+    const wordCount = challenge.title.split(' ').length;
+    client.say(channel, `🎬 ¡Adivina con emojis! ${challenge.emojis} — ${wordCount} palabra${wordCount>1?'s':''}, ${letterCount} letras. Escribe tu respuesta en el chat~ (!emojihint para pista, !emojiskip para saltar) 🕷️`);
     return;
   }
 
