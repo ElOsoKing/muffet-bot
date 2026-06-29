@@ -455,9 +455,10 @@ async function generateEmojiChallenge(channelName, category) {
 
   const prompt = `Genera un reto de adivinanza con emojis para un juego de chat de Twitch.
 Elige ${categoryText} MUY conocido y popular (que la mayoría de gente reconocería).
-Representa el título SOLO con 3 a 6 emojis que se traduzcan directamente al título o a su tema principal — NO describas una escena random.
-CRÍTICO: Cada emoji debe ser preciso y reconocible para el tema. Verifica mentalmente que cada emoji corresponda EXACTAMENTE al elemento correcto (ej. para "El Rey León" usa 🦁 león, NUNCA 🐺 lobo u otro animal).
-Ejemplos del estilo correcto: 🕸️🕷️👨 = Spider-Man, 🦁👑 = The Lion King, 🧊👸❄️ = Frozen.
+Usa EXACTAMENTE 4 a 6 emojis — nunca menos de 4. Combinaciones de solo 2-3 emojis suelen ser demasiado genéricas y ambiguas (ej. "pez + niño" podría ser cualquier película con un pez, evita eso).
+Cada emoji debe aportar información específica que reduzca las opciones posibles — combina elementos del título, personajes, lugares y temas distintivos para que la respuesta sea identificable pero no obvia desde el primer emoji.
+CRÍTICO: Verifica que cada emoji corresponda EXACTAMENTE al elemento correcto del título (ej. para "El Rey León" usa 🦁 león, NUNCA 🐺 lobo u otro animal).
+Ejemplos del estilo correcto: 🕸️🕷️🏙️👨🦸 = Spider-Man, 🦁👑🌍🎶👶 = The Lion King, 🧊👸❄️⛄🏰 = Frozen.
 ${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}
 Responde ÚNICAMENTE en este formato exacto, sin texto adicional, sin comillas:
 EMOJIS|||TÍTULO`;
@@ -2147,7 +2148,12 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
     game.hintsUsed++;
     const words = game.title.split(' ');
-    const hint = words.map(w => w.length > 2 ? w[0] + '_'.repeat(w.length - 1) : w).join(' ');
+    const revealCount = game.hintsUsed; // cada pista revela una letra más por palabra
+    const hint = words.map(w => {
+      if (w.length <= 2) return w; // palabras muy cortas (de, la, el...) se muestran completas
+      const visible = Math.min(revealCount, w.length - 1);
+      return w.slice(0, visible) + '_'.repeat(w.length - visible);
+    }).join(' ');
     client.say(channel, `💡 @${username} usó ${hintCost} puntos por una pista: ${hint} (${words.length} palabra${words.length>1?'s':''}) 🕷️`);
     return;
   }
