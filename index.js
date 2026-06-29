@@ -473,13 +473,16 @@ ${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}`;
   try {
     let raw;
     if (anthropic) {
+      console.log('[emojigame] Generando con Claude Haiku...');
       const completion = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 300,
         messages: [{ role: 'user', content: prompt }],
       });
       raw = (completion.content?.[0]?.text || '').trim();
+      console.log('[emojigame] Respuesta de Claude:', raw.slice(0, 100));
     } else {
+      console.log('[emojigame] ANTHROPIC_API_KEY no configurada — usando Groq de respaldo');
       const completion = await groq.chat.completions.create({
         model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'system', content: prompt }],
@@ -501,7 +504,7 @@ ${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}`;
     }
     return { emojis, title };
   } catch (err) {
-    console.error('[emojigame] Error generando reto:', err.message);
+    console.error('[emojigame] Error generando reto:', err.message, err.stack?.slice(0,300));
     return null;
   }
 }
