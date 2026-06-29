@@ -456,6 +456,7 @@ async function generateEmojiChallenge(channelName, category) {
   const prompt = `Genera un reto de adivinanza con emojis para un juego de chat de Twitch.
 Elige ${categoryText} MUY conocido y popular (que la mayoría de gente reconocería).
 Representa el título SOLO con 3 a 6 emojis que se traduzcan directamente al título o a su tema principal — NO describas una escena random.
+CRÍTICO: Cada emoji debe ser preciso y reconocible para el tema. Verifica mentalmente que cada emoji corresponda EXACTAMENTE al elemento correcto (ej. para "El Rey León" usa 🦁 león, NUNCA 🐺 lobo u otro animal).
 Ejemplos del estilo correcto: 🕸️🕷️👨 = Spider-Man, 🦁👑 = The Lion King, 🧊👸❄️ = Frozen.
 ${usedList ? `NO repitas estos títulos ya usados: ${usedList}.` : ''}
 Responde ÚNICAMENTE en este formato exacto, sin texto adicional, sin comillas:
@@ -463,10 +464,10 @@ EMOJIS|||TÍTULO`;
 
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'system', content: prompt }],
       max_tokens: 60,
-      temperature: 1.0,
+      temperature: 0.9,
     });
     const raw = (completion.choices[0]?.message?.content || '').trim();
     const [emojis, title] = raw.split('|||').map(s => s?.trim());
