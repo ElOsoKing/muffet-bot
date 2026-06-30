@@ -28,6 +28,7 @@ let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvid
 let greetedMap = {}; // { 'elosoking1': Set() }
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
+let emojiGameTimers = {}; // { 'elosoking1': timeoutId } — tiempo límite para revelar respuesta
 const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
 const chatViewers = {}; // { 'elosoking1': Set() } — viewers que han escrito en el chat
 
@@ -2131,7 +2132,21 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
     const letterCount = challenge.title.replace(/\s/g, '').length;
     const wordCount = challenge.title.split(' ').length;
-    client.say(channel, `🎬 ¡Adivina con emojis! ${challenge.emojis} — ${wordCount} palabra${wordCount>1?'s':''}, ${letterCount} letras. Escribe tu respuesta en el chat~ (!emojihint para pista, !emojiskip para saltar) 🕷️`);
+    const timeoutMin = (config.emojigame_config?.timeout_min ?? 2);
+    const timeoutMs = timeoutMin * 60 * 1000;
+
+    // Timer de tiempo límite — si nadie adivina, Muffet revela la respuesta
+    if (emojiGameTimers[channelName]) clearTimeout(emojiGameTimers[channelName]);
+    emojiGameTimers[channelName] = setTimeout(() => {
+      if (!activeEmojiGames[channelName]) return;
+      const game = activeEmojiGames[channelName];
+      delete activeEmojiGames[channelName];
+      delete emojiGameTimers[channelName];
+      const cl = customClients[channelName] || mainClient;
+      cl.say(`#${channelName}`, `⏰ ¡Se acabó el tiempo! La respuesta era: "${game.title}" 🕷️`);
+    }, timeoutMs);
+
+    client.say(channel, `🎬 ¡Adivina con emojis! ${challenge.emojis} — ${wordCount} palabra${wordCount>1?'s':''}, ${letterCount} letras. Tienen ${timeoutMin} minuto${timeoutMin>1?'s':''} ⏱️ (!emojihint para pista, !emojiskip para saltar) 🕷️`);
     return;
   }
 
@@ -2191,6 +2206,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (!game) { client.say(channel, `@${username} No hay ningún reto activo~ 🎮`); return; }
     client.say(channel, `⏭️ Reto saltado — era "${game.title}" 🕷️`);
     delete activeEmojiGames[channelName];
+    if (emojiGameTimers[channelName]) { clearTimeout(emojiGameTimers[channelName]); delete emojiGameTimers[channelName]; }
     return;
   }
 
@@ -2203,6 +2219,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
     if (guess === answer || (guess.length > 3 && answer.includes(guess) && guess.length >= answer.length * 0.7)) {
       delete activeEmojiGames[channelName];
+      if (emojiGameTimers[channelName]) { clearTimeout(emojiGameTimers[channelName]); delete emojiGameTimers[channelName]; }
       const egConfig2 = config.emojigame_config || {};
       const points = egConfig2.base_points ?? 30;
       try {
