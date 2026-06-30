@@ -25,10 +25,12 @@ let channelConfigs = {}; // { 'elosoking1': { bot_prompt, commands, ... } }
 let muffetActiveMap = {}; // { 'elosoking1': true/false }
 let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvida
+let emojiAutoTimers = {}; // { 'elosoking1': intervalId } — reto automático cada X minutos
 let greetedMap = {}; // { 'elosoking1': Set() }
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 let emojiGameTimers = {}; // { 'elosoking1': timeoutId } — tiempo límite para revelar respuesta
+let emojiGameStreaks = {}; // { 'elosoking1': { 'username': count } } — racha de victorias consecutivas
 const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
 const chatViewers = {}; // { 'elosoking1': Set() } — viewers que han escrito en el chat
 
@@ -2222,6 +2224,16 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       if (emojiGameTimers[channelName]) { clearTimeout(emojiGameTimers[channelName]); delete emojiGameTimers[channelName]; }
       const egConfig2 = config.emojigame_config || {};
       const points = egConfig2.base_points ?? 30;
+
+      // Manejo de racha
+      if (!emojiGameStreaks[channelName]) emojiGameStreaks[channelName] = {};
+      const streaks = emojiGameStreaks[channelName];
+      const userKeyStreak = username.toLowerCase();
+      streaks[userKeyStreak] = (streaks[userKeyStreak] || 0) + 1;
+      // Resetear racha de los demás usuarios
+      Object.keys(streaks).forEach(u => { if (u !== userKeyStreak) streaks[u] = 0; });
+      const currentStreak = streaks[userKeyStreak];
+
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
           { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -2236,7 +2248,11 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           body: JSON.stringify({ points_config: { ...pointsConfig, ranking } })
         });
       } catch(e) {}
-      client.say(channel, `🎉 ¡@${username} adivinó "${game.title}"! +${points} puntos~ 🕷️🎬`);
+      let winMsg = `🎉 ¡@${username} adivinó "${game.title}"! +${points} puntos~ 🕷️🎬`;
+      if (currentStreak === 3) winMsg += ` 🔥 ¡Lleva 3 seguidas!`;
+      else if (currentStreak === 5) winMsg += ` 🔥🔥 ¡5 seguidas! ¡Imparable!`;
+      else if (currentStreak > 5) winMsg += ` 🔥🔥🔥 ¡${currentStreak} seguidas! ¡Campeón de emojis!`;
+      client.say(channel, winMsg);
       return;
     }
   }
@@ -2649,6 +2665,42 @@ async function start() {
 
   const autoMsgSignatures = {}; // { ch: 'json de auto_messages' } para detectar cambios
 
+  // ── Reto automático de Emoji Game ──
+  function scheduleEmojiAutoGames() {
+    for (const [ch, config] of Object.entries(channelConfigs)) {
+      const egConfig = config.emojigame_config || {};
+      const autoMin = egConfig.auto_interval_min;
+      const enabled = egConfig.enabled !== false && egConfig.auto_enabled && autoMin > 0;
+
+      if (emojiAutoTimers[ch]) { clearInterval(emojiAutoTimers[ch]); delete emojiAutoTimers[ch]; }
+      if (!enabled || !isPro(ch)) continue;
+
+      emojiAutoTimers[ch] = setInterval(async () => {
+        if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+        if (activeEmojiGames[ch]) return; // ya hay un reto activo
+        const lastActivity = lastChatActivity[ch];
+        if (!lastActivity || Date.now() - lastActivity > 10 * 60 * 1000) return; // chat inactivo
+        const client2 = customClients[ch] || mainClient;
+        const category = egConfig.category || 'random';
+        client2.say(`#${ch}`, `🎮 Pensando un reto de emojis~ 🕷️`);
+        const challenge = await generateEmojiChallenge(ch, category);
+        if (!challenge) return;
+        const timeoutMin = egConfig.timeout_min ?? 2;
+        const letterCount = challenge.title.replace(/\s/g, '').length;
+        const wordCount = challenge.title.split(' ').length;
+        activeEmojiGames[ch] = { emojis: challenge.emojis, title: challenge.title, startedAt: Date.now(), hintsUsed: 0 };
+        if (emojiGameTimers[ch]) clearTimeout(emojiGameTimers[ch]);
+        emojiGameTimers[ch] = setTimeout(() => {
+          if (!activeEmojiGames[ch]) return;
+          const game = activeEmojiGames[ch];
+          delete activeEmojiGames[ch]; delete emojiGameTimers[ch];
+          client2.say(`#${ch}`, `⏰ ¡Se acabó el tiempo! La respuesta era: "${game.title}" 🕷️`);
+        }, timeoutMin * 60 * 1000);
+        client2.say(`#${ch}`, `🎬 ¡Adivina con emojis! ${challenge.emojis} — ${wordCount} palabra${wordCount>1?'s':''}, ${letterCount} letras. Tienen ${timeoutMin} minuto${timeoutMin>1?'s':''} ⏱️ (!emojihint para pista, !emojiskip para saltar) 🕷️`);
+      }, autoMin * 60 * 1000);
+    }
+  }
+
   function scheduleAutoMessages() {
     for (const [ch, config] of Object.entries(channelConfigs)) {
       const signature = JSON.stringify(config.auto_messages || []);
@@ -2705,12 +2757,14 @@ async function start() {
   });
 
   scheduleAutoMessages();
+  scheduleEmojiAutoGames();
 
   // Recargar config cada 30 segundos
   setInterval(async () => {
     await loadAllChannels();
     await setupCustomBots();
     scheduleAutoMessages();
+    scheduleEmojiAutoGames();
     const currentChannels = mainClient.getChannels().map(c => c.replace('#',''));
     const allChannels = Object.keys(channelConfigs);
     for (const ch of allChannels) {
