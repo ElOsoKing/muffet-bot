@@ -2486,6 +2486,7 @@ function setupEvents(client) {
 
   client.on('raided', async (channel, username, viewers) => {
     const ch = channel.replace('#','');
+    if (customClients[ch]) return; // tiene bot propio — ese bot ya maneja sus eventos
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!canAiRespond(ch)) return;
     const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username);
@@ -2494,6 +2495,7 @@ function setupEvents(client) {
 
   client.on('subscription', async (channel, username, methods) => {
     const ch = channel.replace('#','');
+    if (customClients[ch]) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const tier = methods?.plan === '3000' ? 'Tier 3' : methods?.plan === '2000' ? 'Tier 2' : 'Tier 1';
     if (!canAiRespond(ch)) return;
@@ -2503,6 +2505,7 @@ function setupEvents(client) {
 
   client.on('resub', async (channel, username, months) => {
     const ch = channel.replace('#','');
+    if (customClients[ch]) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username);
     botSay(client, channel, msg, true);
@@ -2514,6 +2517,7 @@ function setupEvents(client) {
 
   client.on('submysterygift', async (channel, username, numbOfSubs) => {
     const ch = channel.replace('#','');
+    if (customClients[ch]) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Marcar que este usuario está haciendo mystery gift — ignorar subgifts individuales por 10s
     mysteryGiftBuffer[`${ch}_${username}`] = Date.now();
@@ -2523,6 +2527,7 @@ function setupEvents(client) {
 
   client.on('subgift', async (channel, username, recipient, methods) => {
     const ch = channel.replace('#','');
+    if (customClients[ch]) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (username === 'ananonymousgifter') return;
     // Si es parte de un mystery gift reciente, ignorar
@@ -2537,6 +2542,7 @@ function setupEvents(client) {
   // Bits
   client.on('cheer', async (channel, tags, message) => {
     const ch = channel.replace('#','');
+    if (customClients[ch]) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const username = tags.username;
     const bits = tags.bits;
