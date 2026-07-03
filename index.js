@@ -106,7 +106,10 @@ async function loadAllChannels() {
         custom_bot_token:    s.custom_bot_token    || null,
       };
       if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = s.on_off_ai !== false;
-      if (!greetedMap[ch]) greetedMap[ch] = new Set();
+      if (!greetedMap[ch]) {
+        // Restaurar lista de saludados desde Supabase — sobrevive reinicios del bot
+        greetedMap[ch] = new Set(Array.isArray(s.greeted_users) ? s.greeted_users : []);
+      }
       // Pre-marcar al broadcaster para que nunca lo salude
       greetedMap[ch].add(ch.toLowerCase());
     });
@@ -712,6 +715,12 @@ async function handleMessage(client, channel, tags, message, self) {
 
   if (!alreadyGreetedThisStream) {
     greetedMap[channelName].add(userLowerGreet);
+    // Persistir en Supabase (fire-and-forget) — sobrevive reinicios del bot
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ greeted_users: Array.from(greetedMap[channelName]) })
+    }).catch(() => {});
     const isReturningViewer = (channelConfigs[channelName]?.viewer_points || {})[userLowerGreet] !== undefined;
 
     if (muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
@@ -2931,7 +2940,12 @@ async function checkStreamsLive() {
       }).catch(() => {});
       if (channelConfigs[ch]) channelConfigs[ch].live_announcement = { ...liveConfig, last_seen_started_at: stream.started_at };
 
-      greetedMap[ch] = new Set(); // nuevo stream — reiniciar saludos para TODOS los canales (gratis y Pro)
+      greetedMap[ch] = new Set([ch.toLowerCase()]); // nuevo stream — reiniciar saludos (broadcaster pre-marcado)
+      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ greeted_users: [ch.toLowerCase()] })
+      }).catch(() => {});
 
       // El anuncio en chat solo se manda si tiene la función Pro activada
       if (liveConfig.enabled && s.plan === 'pro') {
