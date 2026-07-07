@@ -2513,7 +2513,7 @@ function setupEvents(client) {
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const tier = methods?.plan === '3000' ? 'Tier 3' : methods?.plan === '2000' ? 'Tier 2' : 'Tier 1';
-    if (!canAiRespond(ch)) return;
+    // Sin canAiRespond — las subs son eventos importantes y no deben perderse por el cooldown
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username);
     botSay(client, channel, msg, true);
   });
