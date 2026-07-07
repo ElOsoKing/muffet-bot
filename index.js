@@ -26,6 +26,7 @@ let muffetActiveMap = {}; // { 'elosoking1': true/false }
 let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvida
 let emojiAutoTimers = {}; // { 'elosoking1': intervalId } — reto automático cada X minutos
+let raidSuppressGreetings = {}; // { 'elosoking1': timestamp } — suprimir saludos individuales tras una raid
 let greetedMap = {}; // { 'elosoking1': Set() }
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
@@ -723,7 +724,10 @@ async function handleMessage(client, channel, tags, message, self) {
     }).catch(() => {});
     const isReturningViewer = (channelConfigs[channelName]?.viewer_points || {})[userLowerGreet] !== undefined;
 
-    if (muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
+    // Durante los 90s tras una raid: se marcan como saludados (arriba) pero sin mensaje individual — el saludo de raid ya los recibió a todos
+    const raidSuppressed = Date.now() < (raidSuppressGreetings[channelName] || 0);
+
+    if (!raidSuppressed && muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
       const isViewbot = /https?:\/\//i.test(message) ||
         /buy\s*(followers|viewers|views|subs)/i.test(message) ||
         /get\s*(views|viewers|followers)/i.test(message) ||
@@ -2497,7 +2501,9 @@ function setupEvents(client) {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return; // el bot propio del canal maneja sus eventos
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
-    if (!canAiRespond(ch)) return;
+    // Suprimir saludos individuales por 90s — que Muffet reciba a la raid en conjunto, no raider por raider
+    raidSuppressGreetings[ch] = Date.now() + 90000;
+    // El saludo de raid NO usa canAiRespond — es un evento importante y no debe perderse por el cooldown
     const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username);
     botSay(client, channel, msg, true);
   });
