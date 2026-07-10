@@ -607,7 +607,7 @@ async function processPrimerinWin(channelName, channel, client, username, pConfi
 }
 
 // ══════════════════════════════════════════
-//  CLIENTE TMI PRINCIPAL (muffet_osoking)
+//  CLIENTE TMI PRINCIPAL (MuffetBot_)
 // ══════════════════════════════════════════
 let mainClient = null;
 
@@ -2674,7 +2674,7 @@ async function setupCustomBots() {
         console.log(`🤖 Bot personalizado conectado: ${config.custom_bot_username} → #${ch}`);
         // Salir del canal principal para no duplicar mensajes
         setTimeout(async () => {
-          try { await mainClient.part(`#${ch}`); console.log(`👋 muffet_osoking salió de #${ch}`); } catch(e) {}
+          try { await mainClient.part(`#${ch}`); console.log(`👋 Bot principal salió de #${ch}`); } catch(e) {}
         }, 2000);
       } catch (err) {
         console.error(`Error conectando bot personalizado para ${ch}:`, err.message);
