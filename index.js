@@ -105,7 +105,6 @@ async function loadAllChannels() {
         youtube_music_config: s.youtube_music_config || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
-        welcome_config:      s.welcome_config      || {},
       };
       if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = s.on_off_ai !== false;
       if (!greetedMap[ch]) {
@@ -2917,7 +2916,6 @@ async function handleTwitchEvent(type, event) {
     if (!channelName || !followerName) return;
     const cfg = channelConfigs[channelName];
     if (!cfg) return;
-    if ((cfg.welcome_config || {}).follow_alerts !== true) return; // desactivado por defecto — el streamer lo activa en el dashboard
     if (!followBuffer[channelName]) followBuffer[channelName] = { names: [], timer: null };
     followBuffer[channelName].names.push(followerName);
     queueFollowThanks(channelName);
@@ -2972,10 +2970,7 @@ async function handleTwitchEvent(type, event) {
 
   try {
     let prompt = '';
-    if (type === 'channel.follow') {
-      const user = event.user_name;
-      prompt = `@${user} acaba de seguir el canal. Agradécele brevemente con tu personalidad.`;
-    } else if (type === 'channel.subscribe') {
+    if (type === 'channel.subscribe') {
       const user = event.user_name;
       const tier = event.tier === '3000' ? 'Tier 3' : event.tier === '2000' ? 'Tier 2' : 'Tier 1';
       prompt = `@${user} se acaba de suscribir al canal (${tier}). Agradécele emocionado con tu personalidad.`;
