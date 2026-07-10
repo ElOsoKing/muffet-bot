@@ -1027,7 +1027,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   }
 
 
-  if (firstWord === '!cancion' || firstWord === '!song' || firstWord === '!sr') {
+  if (firstWord === '!cancion' || firstWord === '!canción' || firstWord === '!song' || firstWord === '!sr') {
     if (!isSysCmdEnabled(channelName, 'cancion')) return;
     if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     // Mutex — bloquear al usuario antes de cualquier await
@@ -1042,7 +1042,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const streamer = data?.[0];
       const spotifyConfig = streamer?.spotify_config || {};
 
-      if (!spotifyConfig.enabled) return;
+      if (!spotifyConfig.enabled) { client.say(channel, `@${username} Las peticiones de canciones están desactivadas ahora mismo~ 🎵`); return; }
 
       const token = await getSpotifyToken(channelName);
       if (!token) { client.say(channel, `@${username} Spotify no está conectado — el streamer debe reconectar su cuenta en el dashboard~ 🎵`); return; }
@@ -1185,7 +1185,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const streamer = data?.[0];
       const ytConfig = streamer?.youtube_config || {};
 
-      if (!ytConfig.enabled) return;
+      if (!ytConfig.enabled) { client.say(channel, `@${username} Las peticiones de YouTube están desactivadas ahora mismo~ 🎵`); return; }
 
       // Permisos
       const allowed = ytConfig.allowed || ['everyone'];
@@ -2359,7 +2359,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const ytConfig = data?.[0]?.youtube_config || {};
-      if (!ytConfig.enabled) return;
+      if (!ytConfig.enabled) { client.say(channel, `@${username} YouTube está desactivado ahora mismo~ 🎵`); return; }
       const queue = ytConfig.queue || [];
       const playlist = ytConfig.playlist_url;
       if (queue.length > 0) {
