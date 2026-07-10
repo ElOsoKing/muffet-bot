@@ -105,6 +105,7 @@ async function loadAllChannels() {
         youtube_music_config: s.youtube_music_config || {},
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
+        welcome_config:      s.welcome_config      || {},
       };
       if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = s.on_off_ai !== false;
       if (!greetedMap[ch]) {
@@ -2879,8 +2880,50 @@ async function start() {
   }, 30 * 1000);
 }
 
+// ── Buffer de follows — agrupa follows cercanos para evitar spam (follow-bots) ──
+const followBuffer = {}; // { channelName: { names: [], timer } }
+
+function queueFollowThanks(channelName) {
+  const buf = followBuffer[channelName];
+  if (buf.timer) return; // ya hay un flush programado
+  buf.timer = setTimeout(async () => {
+    const names = [...new Set(buf.names)].slice(0, 10); // máx 10 nombres, sin duplicados
+    const total = buf.names.length;
+    followBuffer[channelName] = { names: [], timer: null };
+    if (!names.length) return;
+    if (muffetActiveMap[channelName] === false || muffetSilentMap[channelName]) return;
+    const client = customClients[channelName] || mainClient;
+    try {
+      let msg;
+      if (total === 1) {
+        msg = await getMuffetResponse(channelName, `¡${names[0]} acaba de seguir el canal! Agradécele el follow brevemente con tu personalidad.`, names[0]);
+      } else {
+        const lista = names.map(n => `@${n}`).join(', ');
+        msg = `💜 ¡Gracias por el follow ${lista}${total > names.length ? ` y ${total - names.length} más` : ''}! Bienvenid@s~ 🕷️`;
+      }
+      client.say(`#${channelName}`, msg);
+    } catch(e) {
+      client.say(`#${channelName}`, `💜 ¡Gracias por el follow @${names[0]}! 🕷️`);
+    }
+  }, 15000); // agrupar follows de 15 segundos
+}
+
 // ── Handler de eventos de Twitch (follows, subs, bits) ──
 async function handleTwitchEvent(type, event) {
+  // ── Nuevo follow (via EventSub) ──
+  if (type === 'channel.follow') {
+    const channelName = event.broadcaster_user_login?.toLowerCase();
+    const followerName = event.user_name || event.user_login;
+    if (!channelName || !followerName) return;
+    const cfg = channelConfigs[channelName];
+    if (!cfg) return;
+    if ((cfg.welcome_config || {}).follow_alerts !== true) return; // desactivado por defecto — el streamer lo activa en el dashboard
+    if (!followBuffer[channelName]) followBuffer[channelName] = { names: [], timer: null };
+    followBuffer[channelName].names.push(followerName);
+    queueFollowThanks(channelName);
+    return;
+  }
+
   // ── Ganador del sorteo desde el dashboard ──
   if (type === 'raffle.redemption') {
     const { channel, username, count } = event;
