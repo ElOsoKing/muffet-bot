@@ -451,21 +451,32 @@ function addToHistory(channelName, role, content) {
 // ── Generar reto de Emoji Game con IA — llamada aislada, sin tocar el historial de chat ──
 const usedEmojiAnswers = {}; // { channelName: Set(títulos ya usados en esta sesión) } — evitar repetir
 
-async function generateEmojiChallenge(channelName, category) {
+async function generateEmojiChallenge(channelName, category, _isRetry = false) {
+  // El bot elige al azar el subgénero y la época — evita que la IA repita siempre los mismos títulos famosos
+  const generosPelicula = ['acción', 'terror', 'comedia', 'ciencia ficción', 'animada (cualquier estudio)', 'fantasía', 'aventura', 'crimen/thriller', 'romance', 'superhéroes', 'anime (película)'];
+  const generosSerie = ['drama', 'comedia/sitcom', 'ciencia ficción', 'anime', 'crimen', 'fantasía', 'animada para adultos', 'thriller', 'teen/juvenil'];
+  const generosJuego = ['plataformas retro', 'shooter', 'RPG', 'aventura', 'terror', 'deportes/carreras', 'indie famoso', 'mundo abierto', 'peleas', 'battle royale/multijugador', 'nintendo clásico'];
+  const epocas = ['de los 80s o 90s', 'de los 2000s', 'de los 2010s', 'reciente (últimos 5 años)', 'de cualquier época'];
+
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const epoca = pick(epocas);
+
   const categoryPrompts = {
-    pelicula:   'una película muy conocida (Hollywood o animada)',
-    serie:      'una serie de TV muy conocida',
-    videojuego: 'un videojuego muy conocido (cualquier consola o plataforma)',
-    random:     'una película, serie o videojuego muy conocido (elige tú cuál de los tres)'
+    pelicula:   `una película muy conocida del género ${pick(generosPelicula)}, ${epoca}`,
+    serie:      `una serie de TV muy conocida del género ${pick(generosSerie)}, ${epoca}`,
+    videojuego: `un videojuego muy conocido del tipo ${pick(generosJuego)}, ${epoca}`,
   };
-  const categoryText = categoryPrompts[category] || categoryPrompts.random;
+  const resolvedCategory = category === 'random' || !categoryPrompts[category]
+    ? pick(['pelicula', 'serie', 'videojuego'])
+    : category;
+  const categoryText = categoryPrompts[resolvedCategory];
 
   if (!usedEmojiAnswers[channelName]) usedEmojiAnswers[channelName] = new Set();
-  const usedList = Array.from(usedEmojiAnswers[channelName]).slice(-15).join(', ');
+  const usedList = Array.from(usedEmojiAnswers[channelName]).slice(-25).join(', ');
 
   const prompt = `Vas a generar un reto de adivinanza con emojis para un juego de chat de Twitch.
 
-PASO 1 (no lo muestres en la respuesta): Piensa en ${categoryText} MUY conocido y popular. VARÍA mucho tu elección — no te quedes solo en clásicos animados de Disney/Pixar. Considera también: películas de acción, terror, comedia, ciencia ficción, anime, series de TV de diferentes décadas y géneros, videojuegos de cualquier plataforma (retro, indie, AAA, mobile). Evita repetir el mismo estudio o género dos veces seguidas.
+PASO 1 (no lo muestres en la respuesta): Piensa en ${categoryText}. Debe ser popular y reconocible, pero NO elijas la opción más obvia y famosa del género — elige entre las 20 más conocidas, no siempre la #1.
 
 PASO 2 (no lo muestres): Identifica 4-6 elementos ÚNICOS y DISTINTIVOS de ESE título específico — pueden ser objetos icónicos de la trama, personajes reconocibles, el escenario particular, o eventos clave de la historia. NO uses elementos genéricos que aplican a cualquier película del mismo género (ej. para una película de princesas, NO uses corona/diamante/princesa genéricos — en su lugar usa el elemento ÚNICO de esa historia: para Frozen serían ❄️🧊⛄, para Cenicienta sería 👠🎃🕛, para La Bella y la Bestia sería 🌹🕯️).
 PROHIBIDO usar como relleno genérico: 👑💎🔥 a menos que sean literalmente el objeto central de la trama (ej. el anillo en El Señor de los Anillos).
@@ -502,16 +513,31 @@ ${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franq
     const lines = raw.split('\n').map(l => l.trim()).filter(l => l.includes('|||'));
     const lastValidLine = lines[lines.length - 1] || raw;
     const [emojis, title] = lastValidLine.split('|||').map(s => s?.trim().replace(/^["']|["']$/g, ''));
-    if (!emojis || !title) return null;
+
+    // Validaciones anti-bug: formato correcto, título razonable, sin texto sobrante, no repetido
+    const emojiCount = Array.from(emojis || '').filter(c => c.codePointAt(0) > 0x2000).length;
+    const isValid = emojis && title
+      && emojiCount >= 2
+      && title.length >= 2 && title.length <= 60
+      && !title.includes('\n') && !emojis.includes('PASO')
+      && !usedEmojiAnswers[channelName].has(title.toLowerCase());
+
+    if (!isValid) {
+      console.log('[emojigame] Resultado inválido o repetido, reintentando...', { emojis, title });
+      if (!_isRetry) return generateEmojiChallenge(channelName, category, true);
+      return null;
+    }
+
     usedEmojiAnswers[channelName].add(title.toLowerCase());
-    if (usedEmojiAnswers[channelName].size > 30) {
+    if (usedEmojiAnswers[channelName].size > 40) {
       // Limpiar los más viejos para no acumular infinito
       const arr = Array.from(usedEmojiAnswers[channelName]);
-      usedEmojiAnswers[channelName] = new Set(arr.slice(-20));
+      usedEmojiAnswers[channelName] = new Set(arr.slice(-30));
     }
     return { emojis, title };
   } catch (err) {
     console.error('[emojigame] Error generando reto:', err.message, err.stack?.slice(0,300));
+    if (!_isRetry) return generateEmojiChallenge(channelName, category, true);
     return null;
   }
 }
