@@ -802,7 +802,7 @@ async function handleMessage(client, channel, tags, message, self) {
         const lastTime = slowModeTracker[channelName][username.toLowerCase()] || 0;
         const elapsed = (Date.now() - lastTime) / 1000;
         if (elapsed < modCfg.slow_seconds) {
-          client.deletemessage(channel, tags.id).catch(() => {});
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
           return;
         }
         slowModeTracker[channelName][username.toLowerCase()] = Date.now();
@@ -815,9 +815,9 @@ async function handleMessage(client, channel, tags, message, self) {
           const whitelist = modCfg.link_whitelist || [];
           const isWhitelisted = whitelist.some(domain => message.toLowerCase().includes(domain.toLowerCase()));
           if (!isWhitelisted && !isSub && !isVIP) {
-            client.deletemessage(channel, tags.id).catch(() => {});
+            helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
             client.say(channel, `@${username} Los links no están permitidos~ 🕷️`);
-            if (modCfg.timeout_links) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Link no permitido').catch(e => console.error('[mod] timeout links error:', e.message));
+            if (modCfg.timeout_links) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Link no permitido');
             return;
           }
         }
@@ -835,9 +835,9 @@ async function handleMessage(client, channel, tags, message, self) {
         tracker.lastMsg = msgLower;
         const maxMsgs = modCfg.spam_max_msgs || 5;
         if (tracker.msgs.length > maxMsgs || (isRepeat && tracker.msgs.length > 2)) {
-          client.deletemessage(channel, tags.id).catch(() => {});
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
           client.say(channel, `@${username} ¡No hagas spam, dearie~ 🕷️`);
-          if (modCfg.timeout_spam) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Spam detectado').catch(e => console.error('[mod] timeout spam error:', e.message));
+          if (modCfg.timeout_spam) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Spam detectado');
           tracker.msgs = [];
           return;
         }
@@ -846,9 +846,9 @@ async function handleMessage(client, channel, tags, message, self) {
       // ── Palabras prohibidas ──
       if (config.banned_words?.length > 0) {
         if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
-          client.deletemessage(channel, tags.id).catch(e => console.error('[mod] delete error:', e.message));
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
           client.say(channel, `@${username} ${warnMsg}`);
-          if (modCfg.timeout_banned) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Palabra prohibida').catch(e => console.error('[mod] timeout banned error:', e.message));
+          if (modCfg.timeout_banned) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Palabra prohibida');
           return;
         }
       }
@@ -857,14 +857,71 @@ async function handleMessage(client, channel, tags, message, self) {
       if (modCfg.ai_mod && isPro(channelName) && !isSub && !isVIP) {
         const check = await checkMessageWithAI(message);
         if (check.flagged) {
-          client.deletemessage(channel, tags.id).catch(() => {});
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
           client.say(channel, `@${username} ${warnMsg}`);
-          if (modCfg.timeout_ai) client.timeout(channel, username, modCfg.timeout_duration || 60, 'Moderación IA').catch(e => console.error('[mod] timeout AI error:', e.message));
+          if (modCfg.timeout_ai) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Moderación IA');
           return;
         }
       }
     }
   }
+
+// ══════════════════════════════════════════
+//  MODERACIÓN VÍA HELIX API
+//  (Twitch eliminó /timeout y /delete de IRC en 2023 — tmi.js ya no puede moderar)
+// ══════════════════════════════════════════
+const botUserIdCache = {}; // { token: userId } — cache del ID de cada cuenta de bot
+
+function getModTokenForChannel(channelName, client) {
+  // Si este client es el bot personalizado del canal, usar su token; sino el del bot principal
+  const cfg = channelConfigs[channelName];
+  if (customClients[channelName] && customClients[channelName] === client && cfg?.custom_bot_token) {
+    return cfg.custom_bot_token.replace(/^oauth:/, '');
+  }
+  return (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
+}
+
+async function getBotUserId(token) {
+  if (botUserIdCache[token]) return botUserIdCache[token];
+  try {
+    const res = await fetch('https://api.twitch.tv/helix/users', {
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
+    });
+    const data = await res.json();
+    const id = data.data?.[0]?.id;
+    if (id) botUserIdCache[token] = id;
+    return id || null;
+  } catch(e) { return null; }
+}
+
+async function helixDeleteMessage(client, channelName, roomId, messageId) {
+  try {
+    const token = getModTokenForChannel(channelName, client);
+    const modId = await getBotUserId(token);
+    if (!modId || !roomId || !messageId) return false;
+    const res = await fetch(`https://api.twitch.tv/helix/moderation/chat?broadcaster_id=${roomId}&moderator_id=${modId}&message_id=${messageId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
+    });
+    if (res.status === 401 || res.status === 403) console.error(`[mod] Sin permisos para borrar en #${channelName} — el bot debe ser MOD y su token necesita el scope moderator:manage:chat_messages (status ${res.status})`);
+    return res.ok;
+  } catch(e) { console.error('[mod] delete error:', e.message); return false; }
+}
+
+async function helixTimeout(client, channelName, roomId, targetUserId, durationSec, reason) {
+  try {
+    const token = getModTokenForChannel(channelName, client);
+    const modId = await getBotUserId(token);
+    if (!modId || !roomId || !targetUserId) return false;
+    const res = await fetch(`https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${roomId}&moderator_id=${modId}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { user_id: targetUserId, duration: durationSec, reason: (reason || '').slice(0, 100) } })
+    });
+    if (res.status === 401 || res.status === 403) console.error(`[mod] Sin permisos para timeout en #${channelName} — el bot debe ser MOD y su token necesita el scope moderator:manage:banned_users (status ${res.status})`);
+    return res.ok;
+  } catch(e) { console.error('[mod] timeout error:', e.message); return false; }
+}
 
   // ── Refresh token de Spotify ──
 async function getSpotifyToken(channelName) {
