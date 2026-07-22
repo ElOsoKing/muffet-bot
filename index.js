@@ -190,8 +190,8 @@ async function checkMessageWithAI(message) {
 
 // ── Formatear links de redes ──
 function formatSocials(social_links) {
-  const icons = { twitch:'🎮', youtube:'📺', tiktok:'🎵', twitter:'🐦', instagram:'📸', discord:'💬', youtube_channel:'▶️' };
-  const labels = { twitch:'Twitch', youtube:'YouTube', tiktok:'TikTok', twitter:'Twitter', instagram:'Instagram', discord:'Discord', youtube_channel:'YouTube' };
+  const icons = { twitch:'🎮', youtube:'📺', tiktok:'🎵', twitter:'🐦', instagram:'📸', discord:'💬', youtube_channel:'▶️', donaciones:'💸' };
+  const labels = { twitch:'Twitch', youtube:'YouTube', tiktok:'TikTok', twitter:'Twitter', instagram:'Instagram', discord:'Discord', youtube_channel:'YouTube', donaciones:'Donaciones' };
   return Object.entries(social_links)
     .filter(([k,v]) => v && k !== 'accent_color')
     .map(([k,v]) => `${icons[k]||'🔗'} ${labels[k]||k}: ${v}`)
@@ -2162,6 +2162,18 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const participantWord = uniqueCount === 1 ? 'participante' : 'participantes';
       client.say(channel, `✅ @${username} ¡Entraste al sorteo!${entryMsg} Somos ${uniqueCount} ${participantWord} 🎉🕷️`);
     } catch(e) { client.say(channel, `@${username} Error al entrar al sorteo~ 🕷️`); }
+    return;
+  }
+
+  // ── !donar / !donaciones — link de donaciones del streamer ──
+  if (firstWord === '!donar' || firstWord === '!donaciones' || firstWord === '!paypal' || firstWord === '!tip') {
+    if (!isSysCmdEnabled(channelName, 'redes')) return;
+    const donLink = (config?.social_links || {}).donaciones;
+    if (donLink) {
+      client.say(channel, `💸 ¿Quieres apoyar a ${channelName}? Puedes donar aquí: ${donLink} ¡Gracias por el apoyo! 🕷️♥`);
+    } else {
+      client.say(channel, `@${username} ${channelName} no tiene link de donaciones configurado~ 🕷️`);
+    }
     return;
   }
 
