@@ -30,6 +30,7 @@ let raidSuppressGreetings = {}; // { 'elosoking1': timestamp } — suprimir salu
 let greetedMap = {}; // { 'elosoking1': Set() }
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
+let betCooldowns = {}; // { 'canal_usuario': timestamp } — anti-spam de !apostar
 let emojiGameTimers = {}; // { 'elosoking1': timeoutId } — tiempo límite para revelar respuesta
 let emojiGameStreaks = {}; // { 'elosoking1': { 'username': count } } — racha de victorias consecutivas
 const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
@@ -261,10 +262,11 @@ async function getFreshStreamerToken(channelName) {
   return { token: newToken, twitchId: streamer.twitch_id };
 }
 
-// ── Quitar claves internas de bookkeeping (_level, etc) antes de guardar viewer_points en Supabase ──
+// ── Quitar claves internas de bookkeeping (_level, _betstreak, etc) antes de guardar viewer_points en Supabase ──
+const INTERNAL_POINT_SUFFIXES = ['_level', '_betstreak'];
 function cleanViewerPoints(viewerPoints) {
   return Object.fromEntries(
-    Object.entries(viewerPoints || {}).filter(([k]) => !k.endsWith('_level') && !k.startsWith('_'))
+    Object.entries(viewerPoints || {}).filter(([k]) => !k.startsWith('_') && !INTERNAL_POINT_SUFFIXES.some(sfx => k.endsWith(sfx)))
   );
 }
 
@@ -1546,26 +1548,62 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (!isSysCmdEnabled(channelName, 'apostar')) return;
     const pointsConfig = config.points_config || {};
     if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
-    const amount = parseInt(message.trim().split(' ')[1]);
+
+    const args = message.trim().split(/\s+/);
+    const amount = parseInt(args[1]);
+    const riskArg = (args[2] || '').toLowerCase();
     const maxBet = pointsConfig.max_bet || 500;
     const emoji = pointsConfig.emoji || '🏆';
     const name = pointsConfig.name || 'puntos';
-    if (!amount || amount < 1) { client.say(channel, `@${username} Uso: !apostar 100 🕷️`); return; }
+
+    if (!amount || amount < 1) {
+      client.say(channel, `@${username} Uso: !apostar 100 [facil|arriesgado|extremo] — 🎲 facil: 50% gana x2 · 🔥 arriesgado: 25% gana x4 · 💀 extremo: 10% gana x9 🕷️`);
+      return;
+    }
     if (amount > maxBet) { client.say(channel, `@${username} Máximo ${maxBet} ${name} por apuesta~ 🕷️`); return; }
+
+    // Cooldown anti-spam de 8s por usuario
+    const betCooldownKey = `${channelName}_${username.toLowerCase()}`;
+    const lastBet = betCooldowns[betCooldownKey] || 0;
+    if (Date.now() - lastBet < 8000) return;
+    betCooldowns[betCooldownKey] = Date.now();
+
+    const tiers = {
+      facil:      { chance: 0.50, mult: 2, icon: '🎲' },
+      arriesgado: { chance: 0.25, mult: 4, icon: '🔥' },
+      extremo:    { chance: 0.10, mult: 9, icon: '💀' },
+    };
+    const tier = tiers[riskArg] || tiers.facil;
+
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
     const userLower = username.toLowerCase();
     const current = viewerPoints[userLower] || 0;
     if (current < amount) { client.say(channel, `@${username} No tienes suficientes ${name}! Tienes ${current} ${emoji} 🕷️`); return; }
-    // 50/50
-    const won = Math.random() < 0.5;
-    const newTotal = won ? current + amount : current - amount;
+
+    const won = Math.random() < tier.chance;
+    const streakKey = `${userLower}_betstreak`;
+    let streak = viewerPoints[streakKey] || 0;
+
+    let newTotal;
+    if (won) {
+      const winnings = Math.round(amount * (tier.mult - 1)); // ganancia neta (no cuenta lo apostado)
+      newTotal = current + winnings;
+      streak++;
+      viewerPoints[streakKey] = streak;
+
+      let msg = `${tier.icon} ¡@${username} ganó la apuesta ${riskArg && tiers[riskArg] ? riskArg : ''}! +${winnings} ${emoji} → Total: ${newTotal} ${name} 🎉🕷️`;
+      if (streak === 3) msg += ` 🔥 ¡3 seguidas!`;
+      else if (streak === 5) msg += ` 🔥🔥 ¡5 seguidas, está en llamas!`;
+      else if (streak > 5 && streak % 5 === 0) msg += ` 🔥🔥🔥 ¡${streak} seguidas! ¡Imparable!`;
+      client.say(channel, msg);
+    } else {
+      newTotal = current - amount;
+      viewerPoints[streakKey] = 0; // se rompe la racha
+      client.say(channel, `${tier.icon} @${username} perdió la apuesta${riskArg && tiers[riskArg] ? ' ' + riskArg : ''}... -${amount} ${emoji} → Total: ${newTotal} ${name} 😢🕷️`);
+    }
     viewerPoints[userLower] = Math.max(0, newTotal);
     channelConfigs[channelName].viewer_points = viewerPoints;
-    if (won) {
-      client.say(channel, `🎰 ¡@${username} ganó la apuesta! +${amount} ${emoji} → Total: ${newTotal} ${name} 🎉🕷️`);
-    } else {
-      client.say(channel, `🎰 @${username} perdió la apuesta... -${amount} ${emoji} → Total: ${newTotal} ${name} 😢🕷️`);
-    }
+
     fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
       method: 'PATCH',
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
