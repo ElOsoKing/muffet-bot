@@ -261,6 +261,13 @@ async function getFreshStreamerToken(channelName) {
   return { token: newToken, twitchId: streamer.twitch_id };
 }
 
+// ── Quitar claves internas de bookkeeping (_level, etc) antes de guardar viewer_points en Supabase ──
+function cleanViewerPoints(viewerPoints) {
+  return Object.fromEntries(
+    Object.entries(viewerPoints || {}).filter(([k]) => !k.endsWith('_level') && !k.startsWith('_'))
+  );
+}
+
 async function resolveVariables(text, channelName, username, touser) {
   let result = text;
   result = result.replace(/\{user\}/g, username);
@@ -1562,7 +1569,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
       method: 'PATCH',
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: viewerPoints })
+      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
     }).catch(() => {});
     return;
   }
@@ -1610,7 +1617,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
         method: 'PATCH',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ viewer_points: viewerPoints, redeem_requests: requests })
+        body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints), redeem_requests: requests })
       });
       client.say(channel, `✅ @${username} canjeó "${reward.name}" por ${reward.cost} ${emoji}! El streamer revisará tu solicitud~ 🕷️`);
     } catch(e) {
@@ -1662,11 +1669,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       channelConfigs[channelName]._pointsFlushTimer = setTimeout(async () => {
         channelConfigs[channelName]._pointsFlushTimer = null;
         try {
-          // Filtrar keys internas (_level, etc) antes de guardar en Supabase
-          const pointsToSave = Object.fromEntries(
-            Object.entries(channelConfigs[channelName].viewer_points || {})
-              .filter(([k]) => !k.endsWith('_level') && !k.startsWith('_'))
-          );
+          const pointsToSave = cleanViewerPoints(channelConfigs[channelName].viewer_points);
           await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
             method: 'PATCH',
             headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -1697,7 +1700,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
   if (firstWord === '!top' || firstWord === '!ranking') {
     if (!isSysCmdEnabled(channelName, 'top')) return;
-    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const viewerPoints = cleanViewerPoints(channelConfigs[channelName].viewer_points);
     const pointsConfig = config.points_config || {};
     const emoji = pointsConfig.emoji || '🏆';
     const top5 = Object.entries(viewerPoints).sort((a,b) => b[1]-a[1]).slice(0,5);
@@ -1722,7 +1725,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
       method: 'PATCH',
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: viewerPoints })
+      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
     }).catch(() => {});
     return;
   }
@@ -2468,7 +2471,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
       method: 'PATCH',
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: viewerPoints })
+      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
     }).catch(() => {});
 
     const prompt = `¡Duelo de puntos! @${username} retó a @${target} por ${amount} ${name}. ¡Ganó @${winner}! Anúncialo emocionado con tu personalidad en máximo 2 oraciones.`;
