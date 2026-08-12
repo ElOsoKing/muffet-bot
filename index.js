@@ -31,6 +31,7 @@ let greetedMap = {}; // { 'elosoking1': Set() }
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 let betCooldowns = {}; // { 'canal_usuario': timestamp } — anti-spam de !apostar
+let activeDuels = {}; // { 'canal': { 'targetLower': { challenger, challengerDisplay, amount, timer } } }
 let emojiGameTimers = {}; // { 'elosoking1': timeoutId } — tiempo límite para revelar respuesta
 let emojiGameStreaks = {}; // { 'elosoking1': { 'username': count } } — racha de victorias consecutivas
 const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
@@ -2474,6 +2475,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const amount = parseInt(parts[2]);
     const emoji = pointsConfig.emoji || '🏆';
     const name = pointsConfig.name || 'puntos';
+    const maxBet = pointsConfig.max_bet || 500;
 
     if (!target || !amount || amount < 1) {
       client.say(channel, `@${username} Uso: !duelo @usuario cantidad — Ej: !duelo @wolf 100 🕷️`);
@@ -2483,27 +2485,65 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       client.say(channel, `@${username} ¡No puedes retarte a ti mismo, dearie! 🕷️`);
       return;
     }
+    if (amount > maxBet) { client.say(channel, `@${username} Máximo ${maxBet} ${name} por duelo~ 🕷️`); return; }
+
+    if (!activeDuels[channelName]) activeDuels[channelName] = {};
+    if (activeDuels[channelName][target]) {
+      client.say(channel, `@${username} @${target} ya tiene un duelo pendiente~ 🕷️`);
+      return;
+    }
+    if (activeDuels[channelName][username.toLowerCase()]) {
+      client.say(channel, `@${username} Ya tienes un duelo pendiente esperando respuesta~ 🕷️`);
+      return;
+    }
 
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
     const challengerPoints = viewerPoints[username.toLowerCase()] || 0;
-    const targetPoints = viewerPoints[target] || 0;
 
     if (challengerPoints < amount) {
       client.say(channel, `@${username} No tienes suficientes ${name}! Tienes ${challengerPoints} ${emoji} 🕷️`);
       return;
     }
-    if (targetPoints < amount) {
-      client.say(channel, `@${username} @${target} no tiene suficientes ${name} para el duelo~ 🕷️`);
+
+    // Duelo pendiente — el retado debe aceptar con !aceptar en 60s
+    const timer = setTimeout(() => {
+      if (activeDuels[channelName]?.[target]?.challenger === username.toLowerCase()) {
+        delete activeDuels[channelName][target];
+        client.say(channel, `⌛ @${target} no respondió a tiempo — el duelo contra @${username} expiró~ 🕷️`);
+      }
+    }, 60000);
+
+    activeDuels[channelName][target] = { challenger: username.toLowerCase(), challengerDisplay: username, amount, timer };
+    client.say(channel, `⚔️ @${username} reta a @${target} por ${amount} ${emoji}! @${target} escribe !aceptar o !rechazar (60s) 🕷️`);
+    return;
+  }
+
+  // ── !aceptar — aceptar un duelo pendiente ──
+  if (firstWord === '!aceptar' || firstWord === '!accept') {
+    const userLowerAccept = username.toLowerCase();
+    const duel = activeDuels[channelName]?.[userLowerAccept];
+    if (!duel) { client.say(channel, `@${username} No tienes ningún duelo pendiente~ 🕷️`); return; }
+
+    const pointsConfig = config.points_config || {};
+    const emoji = pointsConfig.emoji || '🏆';
+    const name = pointsConfig.name || 'puntos';
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const accepterPoints = viewerPoints[userLowerAccept] || 0;
+
+    if (accepterPoints < duel.amount) {
+      client.say(channel, `@${username} Necesitas ${duel.amount} ${emoji} para aceptar — tienes ${accepterPoints} 🕷️`);
       return;
     }
 
-    // Duelo — 50/50
-    const challengerWins = Math.random() < 0.5;
-    const winner = challengerWins ? username : target;
-    const loser = challengerWins ? target : username;
+    clearTimeout(duel.timer);
+    delete activeDuels[channelName][userLowerAccept];
 
-    viewerPoints[winner.toLowerCase()] = (viewerPoints[winner.toLowerCase()] || 0) + amount;
-    viewerPoints[loser.toLowerCase()] = Math.max(0, (viewerPoints[loser.toLowerCase()] || 0) - amount);
+    const challengerWins = Math.random() < 0.5;
+    const winner = challengerWins ? duel.challengerDisplay : username;
+    const loser = challengerWins ? username : duel.challengerDisplay;
+
+    viewerPoints[winner.toLowerCase()] = (viewerPoints[winner.toLowerCase()] || 0) + duel.amount;
+    viewerPoints[loser.toLowerCase()] = Math.max(0, (viewerPoints[loser.toLowerCase()] || 0) - duel.amount);
     channelConfigs[channelName].viewer_points = viewerPoints;
 
     fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
@@ -2512,9 +2552,20 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
     }).catch(() => {});
 
-    const prompt = `¡Duelo de puntos! @${username} retó a @${target} por ${amount} ${name}. ¡Ganó @${winner}! Anúncialo emocionado con tu personalidad en máximo 2 oraciones.`;
+    const prompt = `¡Duelo de puntos! @${duel.challengerDisplay} retó a @${username} por ${duel.amount} ${name}. ¡Ganó @${winner}! Anúncialo emocionado con tu personalidad en máximo 2 oraciones.`;
     const msg = await getMuffetResponse(channelName, prompt, username);
     client.say(channel, `⚔️ ${msg}`);
+    return;
+  }
+
+  // ── !rechazar — rechazar un duelo pendiente ──
+  if (firstWord === '!rechazar' || firstWord === '!decline') {
+    const userLowerDecline = username.toLowerCase();
+    const duel = activeDuels[channelName]?.[userLowerDecline];
+    if (!duel) { client.say(channel, `@${username} No tienes ningún duelo pendiente~ 🕷️`); return; }
+    clearTimeout(duel.timer);
+    delete activeDuels[channelName][userLowerDecline];
+    client.say(channel, `🙅 @${username} rechazó el duelo de @${duel.challengerDisplay}~ 🕷️`);
     return;
   }
 
