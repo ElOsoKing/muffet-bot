@@ -2054,6 +2054,15 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       client.say(channel, `@${username} El comando debe empezar con ! dearie~ 🕷️`);
       return;
     }
+    if (response.length > 450) {
+      client.say(channel, `@${username} La respuesta es muy larga (máx 450 caracteres) — Twitch podría rechazarla~ 🕷️`);
+      return;
+    }
+    const RESERVED_COMMANDS = ['!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!encuesta','!endpoll','!game','!give','!juego','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
+    if (firstWord === '!addcmd' && RESERVED_COMMANDS.includes(trigger)) {
+      client.say(channel, `@${username} ${trigger} ya es un comando propio de Muffet — no se puede sobreescribir, elige otro nombre~ 🕷️`);
+      return;
+    }
     // Guardar en Supabase
     const config = channelConfigs[channelName];
     const commands = { ...(config.commands || {}) };
