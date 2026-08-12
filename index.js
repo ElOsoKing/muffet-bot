@@ -222,6 +222,45 @@ async function getTwitchAppToken() {
   }
 }
 
+// ── Refrescar el access_token de un streamer usando su refresh_token ──
+async function refreshStreamerToken(twitchId, refreshToken) {
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token', refresh_token: refreshToken,
+        client_id: process.env.TWITCH_CLIENT_ID, client_secret: process.env.TWITCH_CLIENT_SECRET,
+      }).toString()
+    });
+    const data = await res.json();
+    if (!data.access_token) { console.error('[twitch-refresh] Sin access_token en la respuesta:', JSON.stringify(data)); return null; }
+    await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_id=eq.${twitchId}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token || refreshToken })
+    });
+    console.log(`[twitch-refresh] Token renovado para twitch_id ${twitchId}`);
+    return data.access_token;
+  } catch(e) { console.error('[twitch-refresh] error:', e.message); return null; }
+}
+
+// ── Obtener un access_token válido del streamer — lo renueva automáticamente si venció ──
+async function getFreshStreamerToken(channelName) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+  const data = await res.json();
+  const streamer = data?.[0];
+  if (!streamer?.access_token) return { token: null, twitchId: streamer?.twitch_id };
+  // Verificar validez del token actual
+  const check = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { 'Authorization': `Bearer ${streamer.access_token}` } });
+  if (check.ok) return { token: streamer.access_token, twitchId: streamer.twitch_id };
+  // Token vencido — intentar renovar
+  if (!streamer.refresh_token) return { token: null, twitchId: streamer.twitch_id, expired: true };
+  const newToken = await refreshStreamerToken(streamer.twitch_id, streamer.refresh_token);
+  return { token: newToken, twitchId: streamer.twitch_id };
+}
+
 async function resolveVariables(text, channelName, username, touser) {
   let result = text;
   result = result.replace(/\{user\}/g, username);
@@ -1451,11 +1490,13 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (!newTitle) { client.say(channel, `@${username} Uso: !titulo Mi nuevo título 🕷️`); return; }
     if (newTitle.length > 140) { client.say(channel, `@${username} El título es muy largo, máximo 140 caracteres~ 🕷️`); return; }
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const token = data?.[0]?.access_token;
-      const twitchId = data?.[0]?.twitch_id;
-      if (!token) { client.say(channel, `@${username} Sin token de Twitch~ 🕷️`); return; }
+      const { token, twitchId, expired } = await getFreshStreamerToken(channelName);
+      if (!token) {
+        client.say(channel, expired
+          ? `@${username} La sesión de Twitch venció y no se pudo renovar — reconecta tu cuenta en el dashboard~ 🕷️`
+          : `@${username} Sin token de Twitch~ 🕷️`);
+        return;
+      }
       const r = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${twitchId}`, {
         method: 'PATCH',
         headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Content-Type': 'application/json' },
@@ -1474,11 +1515,13 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const gameName = message.trim().slice(firstWord.length).trim();
     if (!gameName) { client.say(channel, `@${username} Uso: !juego Minecraft 🕷️`); return; }
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const token = data?.[0]?.access_token;
-      const twitchId = data?.[0]?.twitch_id;
-      if (!token) { client.say(channel, `@${username} Sin token de Twitch~ 🕷️`); return; }
+      const { token, twitchId, expired } = await getFreshStreamerToken(channelName);
+      if (!token) {
+        client.say(channel, expired
+          ? `@${username} La sesión de Twitch venció y no se pudo renovar — reconecta tu cuenta en el dashboard~ 🕷️`
+          : `@${username} Sin token de Twitch~ 🕷️`);
+        return;
+      }
       // Buscar el juego
       const searchRes = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(gameName)}&first=1`, {
         headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' }
