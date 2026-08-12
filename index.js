@@ -3117,19 +3117,27 @@ async function checkStreamsLive() {
       if (liveConfig.last_seen_started_at === stream.started_at) continue;
 
       // Stream genuinamente nuevo — actualizar Supabase para no repetir tras el próximo reinicio
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ live_announcement: { ...liveConfig, last_seen_started_at: stream.started_at } })
-      }).catch(() => {});
+      try {
+        const liveRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ live_announcement: { ...liveConfig, last_seen_started_at: stream.started_at } })
+        });
+        if (!liveRes.ok) console.error(`[live-reset] Falló el PATCH para #${ch}: status ${liveRes.status}`);
+      } catch(e) { console.error(`[live-reset] Error de red para #${ch}:`, e.message); }
       if (channelConfigs[ch]) channelConfigs[ch].live_announcement = { ...liveConfig, last_seen_started_at: stream.started_at };
 
       greetedMap[ch] = new Set([ch.toLowerCase()]); // nuevo stream — reiniciar saludos (broadcaster pre-marcado)
-      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ greeted_users: [ch.toLowerCase()] })
-      }).catch(() => {});
+      // IMPORTANTE: esperar (no fire-and-forget) para minimizar la ventana donde un reinicio del bot
+      // podría volver a cargar la lista vieja de Supabase antes de que se guarde la limpia.
+      try {
+        const clearRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ greeted_users: [ch.toLowerCase()] })
+        });
+        if (!clearRes.ok) console.error(`[greeted-reset] Falló el PATCH para #${ch}: status ${clearRes.status}`);
+      } catch(e) { console.error(`[greeted-reset] Error de red para #${ch}:`, e.message); }
 
       // El anuncio en chat solo se manda si tiene la función Pro activada
       if (liveConfig.enabled && s.plan === 'pro') {
