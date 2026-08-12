@@ -1545,6 +1545,74 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   }
 
   // ── !apostar ──
+  // ── !slots — tragamonedas ──
+  if (firstWord === '!slots' || firstWord === '!tragaperras') {
+    if (!isSysCmdEnabled(channelName, 'slots')) return;
+    const pointsConfig = config.points_config || {};
+    if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
+
+    const amount = parseInt(message.trim().split(/\s+/)[1]);
+    const maxBet = pointsConfig.max_bet || 500;
+    const emoji = pointsConfig.emoji || '🏆';
+    const name = pointsConfig.name || 'puntos';
+
+    if (!amount || amount < 1) { client.say(channel, `@${username} Uso: !slots 100 🎰🕷️`); return; }
+    if (amount > maxBet) { client.say(channel, `@${username} Máximo ${maxBet} ${name} por tirada~ 🕷️`); return; }
+
+    const slotsCooldownKey = `${channelName}_${username.toLowerCase()}`;
+    const lastSlot = betCooldowns[slotsCooldownKey] || 0;
+    if (Date.now() - lastSlot < 8000) return;
+    betCooldowns[slotsCooldownKey] = Date.now();
+
+    const viewerPoints = channelConfigs[channelName].viewer_points || {};
+    const userLower = username.toLowerCase();
+    const current = viewerPoints[userLower] || 0;
+    if (current < amount) { client.say(channel, `@${username} No tienes suficientes ${name}! Tienes ${current} ${emoji} 🕷️`); return; }
+
+    // Pool ponderado — símbolos comunes se repiten más para que salgan más seguido
+    const pool = ['🍒','🍒','🍒','🍋','🍋','🍋','🍇','🍇','🔔','🔔','💎','7️⃣'];
+    const spin = () => pool[Math.floor(Math.random() * pool.length)];
+    const reels = [spin(), spin(), spin()];
+    const display = reels.join(' ');
+
+    let mult = 0; // multiplicador NETO (0 = pierde todo, 1 = recupera lo apostado, >1 = gana)
+    let resultTag = '';
+    if (reels[0] === reels[1] && reels[1] === reels[2]) {
+      // Triple — el pago depende del símbolo
+      const jackpotTable = { '7️⃣': 10, '💎': 7, '🔔': 5, '🍇': 4, '🍋': 3, '🍒': 3 };
+      mult = jackpotTable[reels[0]] || 3;
+      resultTag = reels[0] === '7️⃣' ? ' 🎉 ¡JACKPOT! 🎉' : ' ¡TRIPLE!';
+    } else if (reels[0] === reels[1] || reels[1] === reels[2] || reels[0] === reels[2]) {
+      mult = 1; // dos iguales — recupera lo apostado, ni gana ni pierde
+      resultTag = ' (casi)';
+    } else {
+      mult = 0;
+    }
+
+    const viewerPointsNow = channelConfigs[channelName].viewer_points || {};
+    let newTotal;
+    if (mult > 1) {
+      const winnings = Math.round(amount * (mult - 1));
+      newTotal = current + winnings;
+      client.say(channel, `🎰 ${display} —${resultTag} @${username} ganó ${winnings} ${emoji}! → Total: ${newTotal} ${name} 🕷️`);
+    } else if (mult === 1) {
+      newTotal = current;
+      client.say(channel, `🎰 ${display} —${resultTag} @${username} recuperó su apuesta, sin ganar ni perder~ 🕷️`);
+    } else {
+      newTotal = current - amount;
+      client.say(channel, `🎰 ${display} — @${username} perdió ${amount} ${emoji}... → Total: ${newTotal} ${name} 😢🕷️`);
+    }
+    viewerPointsNow[userLower] = Math.max(0, newTotal);
+    channelConfigs[channelName].viewer_points = viewerPointsNow;
+
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPointsNow) })
+    }).catch(() => {});
+    return;
+  }
+
   if (firstWord === '!apostar' || firstWord === '!bet') {
     if (!isSysCmdEnabled(channelName, 'apostar')) return;
     const pointsConfig = config.points_config || {};
