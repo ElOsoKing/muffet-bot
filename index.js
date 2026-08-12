@@ -288,6 +288,7 @@ async function resolveVariables(text, channelName, username, touser) {
             `https://api.twitch.tv/helix/users?login=${targetUser}`,
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
           );
+          if (!userRes.ok) console.error(`[game:var] users API status ${userRes.status} para "${targetUser}"`);
           const userData2 = await userRes.json();
           const userId = userData2?.data?.[0]?.id;
           let game = 'un juego';
@@ -296,11 +297,17 @@ async function resolveVariables(text, channelName, username, touser) {
               `https://api.twitch.tv/helix/channels?broadcaster_id=${userId}`,
               { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
             );
+            if (!channelRes.ok) console.error(`[game:var] channels API status ${channelRes.status} para "${targetUser}" (id ${userId})`);
             const channelData = await channelRes.json();
-            game = channelData?.data?.[0]?.game_name || 'un juego';
+            const rawGame = channelData?.data?.[0]?.game_name;
+            if (!rawGame) console.error(`[game:var] "${targetUser}" no tiene game_name — respuesta: ${JSON.stringify(channelData?.data?.[0] || channelData)}`);
+            game = rawGame || 'un juego';
+          } else {
+            console.error(`[game:var] No se encontró el usuario "${targetUser}" en Twitch — respuesta: ${JSON.stringify(userData2)}`);
           }
           result = result.replace(match[0], game);
         } else {
+          console.error('[game:var] No se pudo obtener el app token de Twitch');
           result = result.replace(match[0], 'un juego');
         }
       } catch(e) {
