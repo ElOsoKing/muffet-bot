@@ -1837,9 +1837,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const parts = message.trim().split(' ');
     const amount = parseInt(parts[1]);
     const target = parts[2]?.replace('@','').toLowerCase();
-    if (!amount || !target) { client.say(channel, `@${username} Uso: !dar 100 @usuario 🕷️`); return; }
+    if (!amount || amount < 1 || !target) { client.say(channel, `@${username} Uso: !dar 100 @usuario 🕷️`); return; }
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
-    viewerPoints[target] = (viewerPoints[target] || 0) + amount;
+    viewerPoints[target] = Math.max(0, (viewerPoints[target] || 0) + amount);
     channelConfigs[channelName].viewer_points = viewerPoints;
     const emoji = config.points_config?.emoji || '🏆';
     client.say(channel, `✅ @${target} recibió ${amount} ${emoji} de @${username} 🕷️`);
