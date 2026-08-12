@@ -264,7 +264,7 @@ async function getFreshStreamerToken(channelName) {
 }
 
 // ── Quitar claves internas de bookkeeping (_level, _betstreak, etc) antes de guardar viewer_points en Supabase ──
-const INTERNAL_POINT_SUFFIXES = ['_level', '_betstreak'];
+const INTERNAL_POINT_SUFFIXES = ['_level', '_betstreak', '_emojiwins'];
 function cleanViewerPoints(viewerPoints) {
   return Object.fromEntries(
     Object.entries(viewerPoints || {}).filter(([k]) => !k.startsWith('_') && !INTERNAL_POINT_SUFFIXES.some(sfx => k.endsWith(sfx)))
@@ -521,7 +521,11 @@ async function generateEmojiChallenge(channelName, category, _isRetry = false) {
     : category;
   const categoryText = categoryPrompts[resolvedCategory];
 
-  if (!usedEmojiAnswers[channelName]) usedEmojiAnswers[channelName] = new Set();
+  if (!usedEmojiAnswers[channelName]) {
+    // Restaurar desde Supabase — sobrevive a reinicios del bot
+    const savedUsed = channelConfigs[channelName]?.emojigame_config?.used_titles;
+    usedEmojiAnswers[channelName] = new Set(Array.isArray(savedUsed) ? savedUsed : []);
+  }
   const usedList = Array.from(usedEmojiAnswers[channelName]).slice(-25).join(', ');
 
   const prompt = `Vas a generar un reto de adivinanza con emojis para un juego de chat de Twitch.
@@ -583,6 +587,16 @@ ${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franq
       // Limpiar los más viejos para no acumular infinito
       const arr = Array.from(usedEmojiAnswers[channelName]);
       usedEmojiAnswers[channelName] = new Set(arr.slice(-30));
+    }
+    // Persistir para que sobreviva reinicios del bot (fire-and-forget)
+    if (channelConfigs[channelName]) {
+      const egCfg = { ...(channelConfigs[channelName].emojigame_config || {}), used_titles: Array.from(usedEmojiAnswers[channelName]) };
+      channelConfigs[channelName].emojigame_config = egCfg;
+      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emojigame_config: egCfg })
+      }).catch(() => {});
     }
     return { emojis, title };
   } catch (err) {
@@ -2426,29 +2440,21 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const userKeyHint = username.toLowerCase();
 
     if (hintCost > 0) {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-        const data = await res.json();
-        const pointsConfig = data?.[0]?.points_config || {};
-        const ranking = pointsConfig.ranking || {};
-        const currentPoints = ranking[userKeyHint] || 0;
+      const viewerPointsHint = channelConfigs[channelName].viewer_points || {};
+      const currentPoints = viewerPointsHint[userKeyHint] || 0;
 
-        if (currentPoints < hintCost) {
-          client.say(channel, `@${username} Necesitas ${hintCost} puntos para una pista — tienes ${currentPoints}~ 🕷️`);
-          return;
-        }
-
-        ranking[userKeyHint] = currentPoints - hintCost;
-        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-          method: 'PATCH',
-          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ points_config: { ...pointsConfig, ranking } })
-        });
-      } catch(e) {
-        client.say(channel, `@${username} Error al cobrar la pista~ 🕷️`);
+      if (currentPoints < hintCost) {
+        client.say(channel, `@${username} Necesitas ${hintCost} puntos para una pista — tienes ${currentPoints}~ 🕷️`);
         return;
       }
+
+      viewerPointsHint[userKeyHint] = currentPoints - hintCost;
+      channelConfigs[channelName].viewer_points = viewerPointsHint;
+      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPointsHint) })
+      }).catch(() => {});
     }
 
     game.hintsUsed++;
@@ -2460,6 +2466,21 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       return w.slice(0, visible) + '_'.repeat(w.length - visible);
     }).join(' ');
     client.say(channel, `💡 @${username} usó ${hintCost} puntos por una pista: ${hint} (${words.length} palabra${words.length>1?'s':''}) 🕷️`);
+    return;
+  }
+
+  // ── !emojitop — ranking de quién más ha adivinado ──
+  if (firstWord === '!emojitop' || firstWord === '!emojiranking') {
+    if (!isSysCmdEnabled(channelName, 'emojigame')) return;
+    const viewerPointsAll = channelConfigs[channelName].viewer_points || {};
+    const wins = Object.entries(viewerPointsAll)
+      .filter(([k]) => k.endsWith('_emojiwins'))
+      .map(([k, v]) => [k.replace(/_emojiwins$/, ''), v])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    if (!wins.length) { client.say(channel, `Aún nadie ha adivinado en el Emoji Game~ 🎬🕷️`); return; }
+    const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+    client.say(channel, `🎬 Top adivinos: ${wins.map(([u,c],i) => `${medals[i]} ${u}(${c})`).join(' | ')} 🕷️`);
     return;
   }
 
@@ -2497,20 +2518,21 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       Object.keys(streaks).forEach(u => { if (u !== userKeyStreak) streaks[u] = 0; });
       const currentStreak = streaks[userKeyStreak];
 
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-        const data = await res.json();
-        const pointsConfig = data?.[0]?.points_config || {};
-        const ranking = pointsConfig.ranking || {};
-        const userKey = username.toLowerCase();
-        ranking[userKey] = (ranking[userKey] || 0) + points;
-        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-          method: 'PATCH',
-          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ points_config: { ...pointsConfig, ranking } })
-        });
-      } catch(e) {}
+      const viewerPointsWin = channelConfigs[channelName].viewer_points || {};
+      const userKey = username.toLowerCase();
+      viewerPointsWin[userKey] = (viewerPointsWin[userKey] || 0) + points;
+      channelConfigs[channelName].viewer_points = viewerPointsWin;
+
+      // Contador de victorias del Emoji Game — para el ranking !emojitop (clave interna, filtrada de viewer_points)
+      const winsKey = `${userKey}_emojiwins`;
+      viewerPointsWin[winsKey] = (viewerPointsWin[winsKey] || 0) + 1;
+
+      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPointsWin) })
+      }).catch(() => {});
+
       let winMsg = `🎉 ¡@${username} adivinó "${game.title}"! +${points} puntos~ 🕷️🎬`;
       if (currentStreak === 3) winMsg += ` 🔥 ¡Lleva 3 seguidas!`;
       else if (currentStreak === 5) winMsg += ` 🔥🔥 ¡5 seguidas! ¡Imparable!`;
