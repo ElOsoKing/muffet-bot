@@ -358,13 +358,7 @@ async function resolveVariables(text, channelName, username, touser) {
 
   if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}')) {
     try {
-      // Buscar el access token del canal
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-      );
-      const data = await res.json();
-      const token = data?.[0]?.access_token;
+      const { token } = await getFreshStreamerToken(channelName);
 
       if (token) {
         const streamRes = await fetch(
@@ -1737,12 +1731,13 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   if (firstWord === '!clip') {
     if (!isSysCmdEnabled(channelName, 'clip')) return;
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const token = data?.[0]?.access_token;
-      const twitchId = data?.[0]?.twitch_id;
-      if (!token) { client.say(channel, `@${username} Sin token de Twitch~ 🕷️`); return; }
+      const { token, twitchId, expired } = await getFreshStreamerToken(channelName);
+      if (!token) {
+        client.say(channel, expired
+          ? `@${username} La sesión de Twitch venció y no se pudo renovar — reconecta el dashboard~ 🕷️`
+          : `@${username} Sin token de Twitch~ 🕷️`);
+        return;
+      }
 
       const clipRes = await fetch(`https://api.twitch.tv/helix/clips?broadcaster_id=${twitchId}`, {
         method: 'POST',
