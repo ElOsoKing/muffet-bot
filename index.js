@@ -1049,6 +1049,15 @@ async function getSpotifyToken(channelName) {
 // Mutex — evita race conditions en !cancion
 const activeSongRequests = new Set();
 
+// ── Lock por canal — serializa lecturas/escrituras de la cola de YouTube para evitar que dos usuarios se pisen ──
+const ytQueueLocks = {};
+function withChannelLock(channelName, fn) {
+  const prev = ytQueueLocks[channelName] || Promise.resolve();
+  const next = prev.then(fn, fn);
+  ytQueueLocks[channelName] = next.catch(() => {});
+  return next;
+}
+
 // Cooldown global de IA por canal — evita spam en raids y eventos masivos
 const aiGlobalCooldown = {}; // { channelName: lastResponseTime }
 const AI_GLOBAL_COOLDOWN_MS = 4000; // 4 segundos entre respuestas de IA
@@ -1325,6 +1334,12 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
   // ── !yt — solicitar canción de YouTube ──
   if (firstWord === '!yt' || firstWord === '!youtube') {
+    if (!isSysCmdEnabled(channelName, 'yt')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+    // Mutex — evitar que dos peticiones simultáneas del mismo usuario se pisen (mismo patrón que !cancion)
+    const ytLockKey = `yt_${channelName}_${username.toLowerCase()}`;
+    if (activeSongRequests.has(ytLockKey)) return;
+    activeSongRequests.add(ytLockKey);
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
@@ -1415,25 +1430,40 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const isBlocked = blacklist.some(b => title.toLowerCase().includes(b.toLowerCase()) || channelTitle.toLowerCase().includes(b.toLowerCase()));
       if (isBlocked) { client.say(channel, `@${username} Esa canción está en la lista negra~ 🕷️`); return; }
 
-      // Agregar a la cola en Supabase
-      const queue = ytConfig.queue || [];
-      queue.push({ videoId, title, channelTitle, requestedBy: userKey, addedAt: Date.now() });
+      // Agregar a la cola en Supabase — dentro de un lock por canal para no pisar a otro usuario que agregue al mismo tiempo
+      const addResult = await withChannelLock(channelName, async () => {
+        const freshRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const freshData = await freshRes.json();
+        const freshYtConfig = freshData?.[0]?.youtube_config || {};
+        const freshQueue = freshYtConfig.queue || [];
+        const freshLimits = freshYtConfig.song_limits || {};
+        const freshUserSongs = Array.isArray(freshLimits[userKey]) ? freshLimits[userKey] : [];
 
-      // Actualizar límite
-      userSongs.push({ uri: videoId, addedAt: Date.now(), durationMs: 240000 });
-      ytLimits[userKey] = userSongs;
+        // Re-verificar el límite con datos frescos por si cambió durante las llamadas a YouTube
+        if (freshUserSongs.length >= maxPerUser) return { ok: false, current: freshUserSongs.length };
 
-      const remaining = maxPerUser - userSongs.length;
-      const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
+        freshQueue.push({ videoId, title, channelTitle, requestedBy: userKey, addedAt: Date.now() });
+        freshUserSongs.push({ uri: videoId, addedAt: Date.now(), durationMs: 240000 });
+        freshLimits[userKey] = freshUserSongs;
 
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_config: { ...ytConfig, queue, song_limits: ytLimits } })
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ youtube_config: { ...freshYtConfig, queue: freshQueue, song_limits: freshLimits } })
+        });
+        return { ok: true, remaining: maxPerUser - freshUserSongs.length };
       });
+
+      if (!addResult.ok) {
+        client.say(channel, `@${username} Tienes ${addResult.current}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
+        return;
+      }
+      const remainingMsg = addResult.remaining > 0 ? ` (puedes pedir ${addResult.remaining} más)` : ` (llegaste al límite)`;
 
       client.say(channel, `🎵 ¡@${username} agregó "${title}"!${remainingMsg} 🎶`);
     } catch(e) { client.say(channel, `@${username} Error al buscar en YouTube~ 🎵`); }
+    finally { activeSongRequests.delete(ytLockKey); }
     return;
   }
 
