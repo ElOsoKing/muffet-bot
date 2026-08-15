@@ -214,6 +214,10 @@ async function getTwitchAppToken() {
       body: `client_id=${process.env.TWITCH_CLIENT_ID}&client_secret=${process.env.TWITCH_CLIENT_SECRET}&grant_type=client_credentials`
     });
     const data = await res.json();
+    if (!data.access_token) {
+      console.error('[Twitch] No se pudo obtener app token — respuesta:', JSON.stringify(data));
+      return null;
+    }
     twitchAppToken = data.access_token;
     twitchAppTokenExpiry = Date.now() + (data.expires_in - 300) * 1000;
     console.log('[Twitch] App token obtenido ✅');
@@ -222,6 +226,12 @@ async function getTwitchAppToken() {
     console.error('[Twitch] Error obteniendo app token:', e.message);
     return null;
   }
+}
+
+// Invalidar el token en caché — usar cuando una API downstream responde 401 con él, para forzar renovación en el próximo intento
+function invalidateTwitchAppToken() {
+  twitchAppToken = null;
+  twitchAppTokenExpiry = 0;
 }
 
 // ── Refrescar el access_token de un streamer usando su refresh_token ──
@@ -331,12 +341,24 @@ async function resolveVariables(text, channelName, username, touser) {
     for (const match of matches) {
       const targetUser = match[1].toLowerCase().replace('@','').replace(/\s+/g,'').trim();
       try {
-        const token = await getTwitchAppToken();
+        let token = await getTwitchAppToken();
         if (token) {
-          const userRes = await fetch(
+          let userRes = await fetch(
             `https://api.twitch.tv/helix/users?login=${targetUser}`,
             { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
           );
+          if (userRes.status === 401) {
+            // Token en caché inválido — forzar renovación y reintentar una vez
+            console.error(`[game:var] Token rechazado (401) — renovando y reintentando para "${targetUser}"`);
+            invalidateTwitchAppToken();
+            token = await getTwitchAppToken();
+            if (token) {
+              userRes = await fetch(
+                `https://api.twitch.tv/helix/users?login=${targetUser}`,
+                { headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } }
+              );
+            }
+          }
           if (!userRes.ok) console.error(`[game:var] users API status ${userRes.status} para "${targetUser}"`);
           const userData2 = await userRes.json();
           const userId = userData2?.data?.[0]?.id;
