@@ -175,7 +175,7 @@ async function flushStats() {
 async function checkMessageWithAI(message) {
   try {
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'openai/gpt-oss-20b',
       messages: [
         { role: 'system', content: `Eres un sistema de moderación de chat de Twitch. Analiza el mensaje y responde SOLO con JSON: {"flagged": true/false, "reason": "razón o null"}. Marca true si hay: insultos, groserías, links maliciosos, spam, acoso, contenido adulto. Marca false si es conversación normal. SOLO el JSON.` },
         { role: 'user', content: `Mensaje: "${message}"` }
@@ -578,7 +578,7 @@ ${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franq
     } else {
       console.log('[emojigame] ANTHROPIC_API_KEY no configurada — usando Groq de respaldo');
       const completion = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         messages: [{ role: 'system', content: prompt }],
         max_tokens: 300,
         temperature: 0.9,
@@ -637,7 +637,7 @@ async function getMuffetResponse(channel, userMessage, username) {
     addToHistory(channel, 'user', `${username}: ${userMessage}`);
 
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'openai/gpt-oss-20b',
       messages: [
         { role: 'system', content: config.bot_prompt },
         ...history.map(h => ({ role: h.role, content: h.content })),
@@ -721,6 +721,10 @@ async function handleMessage(client, channel, tags, message, self) {
 
   // Solo responder en canales registrados en MuffetBot
   if (!channelConfigs[channelName]) return;
+
+  // Si el canal tiene bot personalizado, solo ESE bot debe procesar los mensajes — el mainClient se hace a un lado
+  // (mismo patrón que ya usamos para raids/subs/bits — evita respuestas y comandos duplicados)
+  if (customClients[channelName] && customClients[channelName] !== client) return;
 
   // ── Chat compartido (Shared Chat) — ignorar mensajes que no son del propio canal ──
   // Twitch envía 'source-room-id' cuando el mensaje viene de OTRO canal participante
