@@ -180,8 +180,9 @@ async function checkMessageWithAI(message) {
         { role: 'system', content: `Eres un sistema de moderación de chat de Twitch. Analiza el mensaje y responde SOLO con JSON: {"flagged": true/false, "reason": "razón o null"}. Marca true si hay: insultos, groserías, links maliciosos, spam, acoso, contenido adulto. Marca false si es conversación normal. SOLO el JSON.` },
         { role: 'user', content: `Mensaje: "${message}"` }
       ],
-      max_tokens: 60,
+      max_tokens: 200,
       temperature: 0.1,
+      reasoning_effort: 'low',
     });
     const text = completion.choices[0]?.message?.content || '{"flagged":false}';
     return JSON.parse(text.replace(/```json|```/g, '').trim());
@@ -580,7 +581,7 @@ ${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franq
       const completion = await groq.chat.completions.create({
         model: 'openai/gpt-oss-120b',
         messages: [{ role: 'system', content: prompt }],
-        max_tokens: 300,
+        max_tokens: 600,
         temperature: 0.9,
       });
       raw = (completion.choices[0]?.message?.content || '').trim();
@@ -642,8 +643,9 @@ async function getMuffetResponse(channel, userMessage, username) {
         { role: 'system', content: config.bot_prompt },
         ...history.map(h => ({ role: h.role, content: h.content })),
       ],
-      max_tokens: 150,
+      max_tokens: 400,
       temperature: 0.85,
+      reasoning_effort: 'low',
     });
 
     const response = completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🕷️';
