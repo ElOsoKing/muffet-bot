@@ -2993,19 +2993,22 @@ function setupEvents(client) {
   // Buffer para ignorar subgift individuales cuando son parte de un mystery gift
   const mysteryGiftBuffer = {}; // { 'ch_username': timestamp }
 
-  client.on('submysterygift', async (channel, username, numbOfSubs) => {
+  client.on('submysterygift', async (channel, username, numbOfSubs, methods) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Marcar que este usuario está haciendo mystery gift — ignorar subgifts individuales por 10s
     mysteryGiftBuffer[`${ch}_${username}`] = Date.now();
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, (cfg.minutes_per_giftsub || 0) * numbOfSubs, `${numbOfSubs} gift subs de @${username}`);
+    const minutesEach = cfg[`minutes_per_sub_t${tierNum}`] || 0;
+    addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de @${username}`);
     const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
     botSay(client, channel, msg, true);
   });
 
-  client.on('subgift', async (channel, username, recipient, methods) => {
+  // IMPORTANTE: tmi.js pasa streakMonths ANTES de recipient — (channel, username, streakMonths, recipient, methods, userstate)
+  client.on('subgift', async (channel, username, streakMonths, recipient, methods) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
@@ -3015,8 +3018,9 @@ function setupEvents(client) {
     if (mysteryGiftBuffer[bufferKey] && Date.now() - mysteryGiftBuffer[bufferKey] < 10000) return;
     // Si recipient es inválido ignorar
     if (!recipient || recipient === '0' || recipient === 'anonymous') return;
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, cfg.minutes_per_giftsub, `gift sub de @${username}`);
+    addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `gift sub Tier ${tierNum} de @${username}`);
     const msg = await getMuffetResponse(ch, `@${username} le acaba de regalar una suscripción a @${recipient}. Menciona los dos nombres y agradécele lo generoso que es.`, username);
     botSay(client, channel, msg, true);
   });
