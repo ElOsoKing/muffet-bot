@@ -103,6 +103,7 @@ async function loadAllChannels() {
         raffle_settings:    s.raffle_settings    || {},
         system_commands:    s.system_commands    || {},
         primerin_config:    s.primerin_config    || {},
+        subathon_config:    s.subathon_config    || {},
         live_announcement:  s.live_announcement  || { enabled: false },
         youtube_music_config: s.youtube_music_config || {},
         custom_bot_username: s.custom_bot_username || null,
@@ -280,6 +281,47 @@ function cleanViewerPoints(viewerPoints) {
   return Object.fromEntries(
     Object.entries(viewerPoints || {}).filter(([k]) => !k.startsWith('_') && !INTERNAL_POINT_SUFFIXES.some(sfx => k.endsWith(sfx)))
   );
+}
+
+// ══════════════════════════════════════════
+//  SUBATÓN — el contador de tiempo sube con subs/gifts/bits
+// ══════════════════════════════════════════
+async function addSubathonTime(channelName, minutesToAdd, reason) {
+  if (!minutesToAdd || minutesToAdd <= 0) return;
+  return withChannelLock(`subathon_${channelName}`, async () => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      const cfg = data?.[0]?.subathon_config || {};
+      if (!cfg.enabled) return;
+
+      const maxSeconds = (cfg.max_minutes || 0) > 0 ? cfg.max_minutes * 60 : null;
+      const addSeconds = minutesToAdd * 60;
+
+      let updated;
+      if (cfg.running && cfg.target_end_time) {
+        const currentEnd = new Date(cfg.target_end_time).getTime();
+        const now = Date.now();
+        const baseEnd = Math.max(currentEnd, now); // si ya venció, sumar desde ahora
+        let newEnd = baseEnd + addSeconds * 1000;
+        if (maxSeconds) newEnd = Math.min(newEnd, now + maxSeconds * 1000);
+        updated = { ...cfg, target_end_time: new Date(newEnd).toISOString() };
+      } else {
+        let newRemaining = (cfg.remaining_seconds || 0) + addSeconds;
+        if (maxSeconds) newRemaining = Math.min(newRemaining, maxSeconds);
+        updated = { ...cfg, remaining_seconds: newRemaining };
+      }
+
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subathon_config: updated })
+      });
+      if (channelConfigs[channelName]) channelConfigs[channelName].subathon_config = updated;
+      console.log(`[subathon] +${minutesToAdd}min en #${channelName} (${reason})`);
+    } catch(e) { console.error('[subathon] error:', e.message); }
+  });
 }
 
 async function resolveVariables(text, channelName, username, touser) {
@@ -2289,6 +2331,25 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   }
 
   // ── Sorteo ──
+  // ── !tiempo — ver cuánto queda del subatón ──
+  if (firstWord === '!tiempo' || firstWord === '!subaton' || firstWord === '!subathon') {
+    if (!isSysCmdEnabled(channelName, 'tiempo')) return;
+    const cfg = config.subathon_config || {};
+    if (!cfg.enabled) { client.say(channel, `@${username} No hay ningún subatón activo ahora mismo~ 🕷️`); return; }
+    let secondsLeft;
+    if (cfg.running && cfg.target_end_time) {
+      secondsLeft = Math.max(0, Math.floor((new Date(cfg.target_end_time).getTime() - Date.now()) / 1000));
+    } else {
+      secondsLeft = cfg.remaining_seconds || 0;
+    }
+    const h = Math.floor(secondsLeft / 3600);
+    const m = Math.floor((secondsLeft % 3600) / 60);
+    const s = secondsLeft % 60;
+    const timeStr = h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+    client.say(channel, `⏱️ Tiempo restante del subatón: ${timeStr}${cfg.running ? '' : ' (pausado)'} 🕷️`);
+    return;
+  }
+
   if (firstWord === '!sorteo') {
     if (!isSysCmdEnabled(channelName, 'sorteo')) return;
     const subCmd = msgLower.split(' ')[1];
@@ -2901,16 +2962,22 @@ function setupEvents(client) {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
-    const tier = methods?.plan === '3000' ? 'Tier 3' : methods?.plan === '2000' ? 'Tier 2' : 'Tier 1';
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
+    const tier = `Tier ${tierNum}`;
+    const cfg = channelConfigs[ch]?.subathon_config || {};
+    addSubathonTime(ch, cfg[`minutes_per_sub_t${tierNum}`], `sub ${tier} de ${username}`);
     // Sin canAiRespond — las subs son eventos importantes y no deben perderse por el cooldown
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username);
     botSay(client, channel, msg, true);
   });
 
-  client.on('resub', async (channel, username, months) => {
+  client.on('resub', async (channel, username, months, message, userstate, methods) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
+    const cfg = channelConfigs[ch]?.subathon_config || {};
+    addSubathonTime(ch, cfg[`minutes_per_sub_t${tierNum}`], `resub de ${username}`);
     const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username);
     botSay(client, channel, msg, true);
   });
@@ -2925,6 +2992,8 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Marcar que este usuario está haciendo mystery gift — ignorar subgifts individuales por 10s
     mysteryGiftBuffer[`${ch}_${username}`] = Date.now();
+    const cfg = channelConfigs[ch]?.subathon_config || {};
+    addSubathonTime(ch, (cfg.minutes_per_giftsub || 0) * numbOfSubs, `${numbOfSubs} gift subs de ${username}`);
     const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
     botSay(client, channel, msg, true);
   });
@@ -2939,6 +3008,8 @@ function setupEvents(client) {
     if (mysteryGiftBuffer[bufferKey] && Date.now() - mysteryGiftBuffer[bufferKey] < 10000) return;
     // Si recipient es inválido ignorar
     if (!recipient || recipient === '0' || recipient === 'anonymous') return;
+    const cfg = channelConfigs[ch]?.subathon_config || {};
+    addSubathonTime(ch, cfg.minutes_per_giftsub, `gift sub de ${username}`);
     const msg = await getMuffetResponse(ch, `@${username} le acaba de regalar una suscripción a @${recipient}. Menciona los dos nombres y agradécele lo generoso que es.`, username);
     botSay(client, channel, msg, true);
   });
@@ -2950,6 +3021,11 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const username = tags.username;
     const bits = tags.bits;
+    const cfg = channelConfigs[ch]?.subathon_config || {};
+    if (cfg.bits_unit > 0) {
+      const units = Math.floor(bits / cfg.bits_unit);
+      addSubathonTime(ch, units * (cfg.minutes_per_bits_unit || 0), `${bits} bits de ${username}`);
+    }
     const msg = await getMuffetResponse(ch, `@${username} acaba de donar ${bits} bits al canal. Agradécele con entusiasmo.`, username);
     botSay(client, channel, msg, true);
   });
