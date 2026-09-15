@@ -4,6 +4,17 @@ const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
 
 // ══════════════════════════════════════════
+//  RED DE SEGURIDAD — un error en un evento (raid, sub, comando, etc.) NUNCA debe tumbar
+//  el bot completo para los 18 canales. Se registra el error y el bot sigue vivo.
+// ══════════════════════════════════════════
+process.on('unhandledRejection', (err) => {
+  console.error('🚨 [unhandledRejection] El bot casi se cae por esto, pero sigue vivo:', err?.message || err, err?.stack?.slice(0, 500));
+});
+process.on('uncaughtException', (err) => {
+  console.error('🚨 [uncaughtException] El bot casi se cae por esto, pero sigue vivo:', err?.message || err, err?.stack?.slice(0, 500));
+});
+
+// ══════════════════════════════════════════
 //  CONFIGURACIÓN GLOBAL
 // ══════════════════════════════════════════
 const TWITCH_BOT_USERNAME = process.env.TWITCH_BOT_USERNAME;
@@ -286,6 +297,15 @@ function cleanViewerPoints(viewerPoints) {
 // ══════════════════════════════════════════
 //  SUBATÓN — el contador de tiempo sube con subs/gifts/bits
 // ══════════════════════════════════════════
+// ── Lock genérico por clave — serializa operaciones para evitar que dos eventos se pisen (usado por Subatón) ──
+const globalLocks = {};
+function withChannelLock(lockKey, fn) {
+  const prev = globalLocks[lockKey] || Promise.resolve();
+  const next = prev.then(fn, fn);
+  globalLocks[lockKey] = next.catch(() => {});
+  return next;
+}
+
 async function addSubathonTime(client, channel, channelName, minutesToAdd, chatReason) {
   if (!minutesToAdd || minutesToAdd <= 0) {
     console.log(`[subathon] Evento "${chatReason}" en #${channelName} no sumó tiempo — minutos configurados: ${minutesToAdd}`);
