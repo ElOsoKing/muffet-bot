@@ -287,14 +287,17 @@ function cleanViewerPoints(viewerPoints) {
 //  SUBATÓN — el contador de tiempo sube con subs/gifts/bits
 // ══════════════════════════════════════════
 async function addSubathonTime(client, channel, channelName, minutesToAdd, chatReason) {
-  if (!minutesToAdd || minutesToAdd <= 0) return;
+  if (!minutesToAdd || minutesToAdd <= 0) {
+    console.log(`[subathon] Evento "${chatReason}" en #${channelName} no sumó tiempo — minutos configurados: ${minutesToAdd}`);
+    return;
+  }
   return withChannelLock(`subathon_${channelName}`, async () => {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const cfg = data?.[0]?.subathon_config || {};
-      if (!cfg.enabled) return;
+      if (!cfg.enabled) { console.log(`[subathon] "${chatReason}" en #${channelName} ignorado — subathon_config.enabled es false en Supabase`); return; }
 
       const maxSeconds = (cfg.max_minutes || 0) > 0 ? cfg.max_minutes * 60 : null;
       const addSeconds = minutesToAdd * 60;
