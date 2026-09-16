@@ -1487,41 +1487,46 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const ytLinkMatch = query.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
       if (ytLinkMatch) {
         videoId = ytLinkMatch[1];
-        // Obtener info del video por ID
-        const infoRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${YOUTUBE_API_KEY}`);
-        const infoData = await infoRes.json();
-        const video = infoData.items?.[0];
-        if (!video) { client.say(channel, `@${username} No encontré ese video~ 🎵`); return; }
-        title = video.snippet.title;
-        channelTitle = video.snippet.channelTitle;
       } else {
         // Búsqueda por nombre
         const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=5&key=${YOUTUBE_API_KEY}`);
         const searchData = await searchRes.json();
         const items = searchData.items || [];
         if (!items.length) { client.say(channel, `@${username} No encontré esa canción en YouTube~ 🎵`); return; }
-        const video = items[0];
-        videoId = video.id.videoId;
-        title = video.snippet.title;
-        channelTitle = video.snippet.channelTitle;
+        videoId = items[0].id.videoId;
+      }
+
+      // Una sola llamada con toda la info que necesitamos: título, duración y si se puede reproducir embebido
+      const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${videoId}&key=${YOUTUBE_API_KEY}`);
+      const detailData = await detailRes.json();
+      const video = detailData.items?.[0];
+      if (!video) { client.say(channel, `@${username} No encontré ese video~ 🎵`); return; }
+
+      title = video.snippet.title;
+      channelTitle = video.snippet.channelTitle;
+
+      // Verificar que el video permita reproducirse embebido (fuera de YouTube) — si no, se ve como "video no disponible" en el overlay
+      if (video.status?.embeddable === false) {
+        client.say(channel, `@${username} Ese video no se puede reproducir fuera de YouTube (el dueño lo bloqueó) — intenta con otro 🎵`);
+        return;
+      }
+      if (video.status?.privacyStatus && video.status.privacyStatus !== 'public' && video.status.privacyStatus !== 'unlisted') {
+        client.say(channel, `@${username} Ese video es privado y no se puede reproducir~ 🎵`);
+        return;
       }
 
       // Verificar duración máxima
       const maxDurationMin = ytConfig.max_duration_min || 10;
-      try {
-        const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`);
-        const detailData = await detailRes.json();
-        const duration = detailData.items?.[0]?.contentDetails?.duration || '';
-        // Parsear ISO 8601 duration (PT1H2M3S)
-        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-        if (match) {
-          const totalMin = (parseInt(match[1]||0) * 60) + parseInt(match[2]||0) + (parseInt(match[3]||0) > 0 ? 1 : 0);
-          if (totalMin > maxDurationMin) {
-            client.say(channel, `@${username} Ese video dura ${totalMin} min — el máximo es ${maxDurationMin} min~ 🎵`);
-            return;
-          }
+      const duration = video.contentDetails?.duration || '';
+      // Parsear ISO 8601 duration (PT1H2M3S)
+      const durMatch = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+      if (durMatch) {
+        const totalMin = (parseInt(durMatch[1]||0) * 60) + parseInt(durMatch[2]||0) + (parseInt(durMatch[3]||0) > 0 ? 1 : 0);
+        if (totalMin > maxDurationMin) {
+          client.say(channel, `@${username} Ese video dura ${totalMin} min — el máximo es ${maxDurationMin} min~ 🎵`);
+          return;
         }
-      } catch(e) {}
+      }
 
       // Blacklist
       const blacklist = ytConfig.blacklist || [];
