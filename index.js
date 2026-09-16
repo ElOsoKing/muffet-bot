@@ -33,6 +33,7 @@ const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY 
 //  CONFIG POR CANAL (cargada desde Supabase)
 // ══════════════════════════════════════════
 let channelConfigs = {}; // { 'elosoking1': { bot_prompt, commands, ... } }
+let lastChannelListSignature = null; // evita loguear la lista de canales cada 30s si no cambió
 let muffetActiveMap = {}; // { 'elosoking1': true/false }
 let muffetSilentMap = {}; // { 'elosoking1': true/false } — modo silencio
 let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvida
@@ -129,8 +130,13 @@ async function loadAllChannels() {
       greetedMap[ch].add(ch.toLowerCase());
     });
 
-    console.log(`🐻🕷️ Config cargada para ${streamers.length} canales:`, streamers.map(s => s.twitch_username).join(', '));
-    return streamers.map(s => s.twitch_username.toLowerCase());
+    const channelList = streamers.map(s => s.twitch_username.toLowerCase());
+    const signature = channelList.slice().sort().join(',');
+    if (signature !== lastChannelListSignature) {
+      console.log(`🐻🕷️ Config cargada para ${streamers.length} canales:`, channelList.join(', '));
+      lastChannelListSignature = signature;
+    }
+    return channelList;
   } catch (err) {
     console.error('Error cargando canales:', err.message);
     return [];
@@ -640,14 +646,12 @@ ${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franq
   try {
     let raw;
     if (anthropic) {
-      console.log('[emojigame] Generando con Claude Haiku...');
       const completion = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 300,
         messages: [{ role: 'user', content: prompt }],
       });
       raw = (completion.content?.[0]?.text || '').trim();
-      console.log('[emojigame] Respuesta de Claude:', raw.slice(0, 100));
     } else {
       console.log('[emojigame] ANTHROPIC_API_KEY no configurada — usando Groq de respaldo');
       const completion = await groq.chat.completions.create({
@@ -824,10 +828,6 @@ async function handleMessage(client, channel, tags, message, self) {
   // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
   // NOTA: El canje real se procesa vía EventSub en server.js (handleRewardRedemption).
   // Este bloque solo queda como respaldo si llega vía chat tags (no garantizado).
-  if (tags['custom-reward-id']) {
-    const configuredRewardId = channelConfigs[channelName]?.raffle_settings?.reward_id;
-    console.log(`[canje-chat] ${username} canjeó reward_id: ${tags['custom-reward-id']} | configurado: ${configuredRewardId || 'ninguno'}`);
-  }
 
   // ── Comandos de control (solo mods) ──
   if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
@@ -1251,7 +1251,6 @@ async function trackNowPlaying() {
         // Actualizar cache local
         songLimitsCache[channelName] = { ...cached, limits: newLimits, lastSync: Date.now() };
         if (Object.keys(newLimits).length === 0) activeSpotifyChannels.delete(channelName);
-        console.log(`[music] Límites actualizados para #${channelName}`);
       }
     } catch(e) { console.error('[trackNowPlaying]', e.message); }
   }
@@ -1404,7 +1403,6 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         const remaining = maxPerUser - userSongs.length;
         const remainingMsg = remaining > 0 ? ` (puedes pedir ${remaining} más)` : ` (llegaste al límite)`;
         client.say(channel, `🎵 ¡@${username} agregó "${track.name}" de ${track.artists[0].name}!${remainingMsg} 🎶`);
-        console.log(`[limit] ${chKey}:${userKey}: ${userSongs.length}/${maxPerUser}`);
         // Activar monitoreo para este canal
         activeSpotifyChannels.add(chKey);
         if (songLimitsCache[chKey]) songLimitsCache[chKey].limits = limitsObj;
