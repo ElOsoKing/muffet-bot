@@ -41,6 +41,12 @@ let emojiAutoTimers = {}; // { 'elosoking1': intervalId } — reto automático c
 let raidSuppressGreetings = {}; // { 'elosoking1': timestamp } — suprimir saludos individuales tras una raid
 let greetedMap = {}; // { 'elosoking1': Set() }
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
+
+// ── Fecha del día en horario de República Dominicana (UTC-4, sin horario de verano) — usada para el Pokédle diario ──
+function todayRD() {
+  const rdMs = Date.now() - 4 * 60 * 60 * 1000;
+  return new Date(rdMs).toISOString().slice(0, 10); // YYYY-MM-DD
+}
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 let betCooldowns = {}; // { 'canal_usuario': timestamp } — anti-spam de !apostar
 let activeDuels = {}; // { 'canal': { 'targetLower': { challenger, challengerDisplay, amount, timer } } }
@@ -115,6 +121,7 @@ async function loadAllChannels() {
         raffle_settings:    s.raffle_settings    || {},
         system_commands:    s.system_commands    || {},
         primerin_config:    s.primerin_config    || {},
+        pokedle_config:     s.pokedle_config     || {},
         subathon_config:    s.subathon_config    || {},
         live_announcement:  s.live_announcement  || { enabled: false },
         youtube_music_config: s.youtube_music_config || {},
@@ -608,6 +615,123 @@ function addToHistory(channelName, role, content) {
 
 // ── Generar reto de Emoji Game con IA — llamada aislada, sin tocar el historial de chat ──
 const usedEmojiAnswers = {}; // { channelName: Set(títulos ya usados en esta sesión) } — evitar repetir
+
+// ══════════════════════════════════════════
+//  POKÉDLE — un Pokémon nuevo cada día (hora RD), todo el chat compite, solo el primero gana
+//  Solo se usan DATOS de la PokéAPI (pública, gratuita) — nunca sprites ni imágenes oficiales
+// ══════════════════════════════════════════
+const TYPE_ES = { normal:'Normal', fighting:'Lucha', flying:'Volador', poison:'Veneno', ground:'Tierra', rock:'Roca', bug:'Bicho', ghost:'Fantasma', steel:'Acero', fire:'Fuego', water:'Agua', grass:'Planta', electric:'Eléctrico', psychic:'Psíquico', ice:'Hielo', dragon:'Dragón', dark:'Siniestro', fairy:'Hada' };
+const COLOR_ES = { black:'Negro', blue:'Azul', brown:'Marrón', gray:'Gris', green:'Verde', pink:'Rosa', purple:'Morado', red:'Rojo', white:'Blanco', yellow:'Amarillo' };
+const ROMAN_TO_NUM = { i:1, ii:2, iii:3, iv:4, v:5, vi:6, vii:7, viii:8, ix:9, x:10 };
+
+let pokedexCache = null;
+let pokedexLoadingPromise = null;
+
+async function ensurePokedex(limit = 151) {
+  if (pokedexCache) return pokedexCache;
+  if (pokedexLoadingPromise) return pokedexLoadingPromise;
+
+  pokedexLoadingPromise = (async () => {
+    const list = [];
+    for (let id = 1; id <= limit; id++) {
+      try {
+        const [pRes, sRes] = await Promise.all([
+          fetch(`https://pokeapi.co/api/v2/pokemon/${id}`),
+          fetch(`https://pokeapi.co/api/v2/pokemon-species/${id}`),
+        ]);
+        const p = await pRes.json();
+        const s = await sRes.json();
+        const esName = s.names?.find(n => n.language.name === 'es')?.name || (p.name.charAt(0).toUpperCase() + p.name.slice(1));
+        const genRoman = s.generation?.name?.replace('generation-', '') || 'i';
+        list.push({
+          id,
+          name: esName,
+          types: (p.types || []).map(t => t.type.name),
+          height: (p.height || 0) / 10, // decímetros → metros
+          weight: (p.weight || 0) / 10, // hectogramos → kg
+          generation: ROMAN_TO_NUM[genRoman] || 1,
+          color: s.color?.name || 'gray',
+        });
+      } catch(e) { /* si un pokémon falla, seguimos con el resto */ }
+    }
+    pokedexCache = list;
+    console.log(`[pokedle] Pokédex cargada: ${list.length} Pokémon`);
+    return list;
+  })();
+
+  const result = await pokedexLoadingPromise;
+  pokedexLoadingPromise = null;
+  return result;
+}
+
+function normalizePokeName(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+function pokedleClue(guess, answer) {
+  const answerTypes = new Set(answer.types);
+  const sameTypes = guess.types.length === answer.types.length && guess.types.every(t => answerTypes.has(t));
+  const overlap = guess.types.some(t => answerTypes.has(t));
+  const typeIcon = sameTypes ? '✅' : overlap ? '⚠️' : '❌';
+  const typeLabel = guess.types.map(t => TYPE_ES[t] || t).join('/');
+
+  const genIcon = guess.generation === answer.generation ? '✅' : guess.generation < answer.generation ? '🔼' : '🔽';
+  const heightIcon = Math.abs(guess.height - answer.height) < 0.05 ? '✅' : guess.height < answer.height ? '🔼' : '🔽';
+  const weightIcon = Math.abs(guess.weight - answer.weight) < 0.5 ? '✅' : guess.weight < answer.weight ? '🔼' : '🔽';
+  const colorIcon = guess.color === answer.color ? '✅' : '❌';
+  const colorLabel = COLOR_ES[guess.color] || guess.color;
+
+  return `${guess.name}: Tipo ${typeLabel} ${typeIcon} | Gen ${guess.generation} ${genIcon} | Altura ${heightIcon} | Peso ${weightIcon} | Color ${colorLabel} ${colorIcon}`;
+}
+
+// Lock por canal — evita que dos personas acertando casi al mismo tiempo ambas queden marcadas como ganadoras
+const pokedleLocks = {};
+function withPokedleLock(channelName, fn) {
+  const prev = pokedleLocks[channelName] || Promise.resolve();
+  const next = prev.then(fn, fn);
+  pokedleLocks[channelName] = next.catch(() => {});
+  return next;
+}
+
+// Asegura que el reto del día esté vigente — si cambió el día (hora RD), elige un Pokémon nuevo sin repetir hasta agotar la dex
+async function ensureTodayPokedle(channelName) {
+  return withPokedleLock(channelName, async () => {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const data = await res.json();
+    const cfg = data?.[0]?.pokedle_config || {};
+    const today = todayRD();
+    if (cfg.current_day === today) return cfg; // ya está vigente
+
+    const dex = await ensurePokedex();
+    if (!dex.length) return cfg;
+
+    let usedIds = Array.isArray(cfg.used_ids) ? cfg.used_ids : [];
+    let pool = dex.filter(p => !usedIds.includes(p.id));
+    if (!pool.length) { usedIds = []; pool = dex; }
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    usedIds.push(chosen.id);
+
+    const updated = {
+      ...cfg,
+      current_day: today,
+      current_pokemon_id: chosen.id,
+      solved_by: null,
+      solved_at: null,
+      attempts: 0,
+      used_ids: usedIds,
+      wins: cfg.wins || {},
+    };
+    await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pokedle_config: updated })
+    });
+    if (channelConfigs[channelName]) channelConfigs[channelName].pokedle_config = updated;
+    console.log(`[pokedle] Nuevo reto del día en #${channelName}: #${chosen.id} ${chosen.name}`);
+    return updated;
+  });
+}
 
 async function generateEmojiChallenge(channelName, category, _isRetry = false) {
   // El bot elige al azar el subgénero y la época — evita que la IA repita siempre los mismos títulos famosos
@@ -2650,6 +2774,103 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   }
 
   // ── !emojitop — ranking de quién más ha adivinado ──
+  // ── !pokedle — el Pokémon del día (una vez al día, todo el chat compite) ──
+  if (firstWord === '!pokedle') {
+    if (!isSysCmdEnabled(channelName, 'pokedle')) return;
+    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+
+    const args = message.trim().split(/\s+/).slice(1);
+    const guessName = args.join(' ').trim();
+    const cfg = await ensureTodayPokedle(channelName);
+
+    if (!cfg.current_pokemon_id) { client.say(channel, `@${username} No pude cargar el Pokédle de hoy, intenta en un momento~ 🕷️`); return; }
+
+    // Ya resuelto hoy
+    if (cfg.solved_by) {
+      client.say(channel, `🔴 El Pokédle de hoy ya lo adivinó @${cfg.solved_by} (en ${cfg.attempts} intento${cfg.attempts===1?'':'s'} entre todos) — ¡vuelve mañana! 🕷️`);
+      return;
+    }
+
+    // Sin argumento — solo mostrar estado
+    if (!guessName) {
+      client.say(channel, `🔴 ¡Hay un Pokédle activo hoy! Usa !pokedle <nombre> para intentar adivinar — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'} 🕷️`);
+      return;
+    }
+
+    const dex = await ensurePokedex();
+    const target = normalizePokeName(guessName);
+    const guessMon = dex.find(p => normalizePokeName(p.name) === target);
+    if (!guessMon) { client.say(channel, `@${username} No reconozco ese Pokémon (de los primeros 151) — revisa cómo lo escribiste~ 🕷️`); return; }
+
+    const answer = dex.find(p => p.id === cfg.current_pokemon_id);
+    if (!answer) { client.say(channel, `@${username} Error interno con el Pokédle de hoy~ 🕷️`); return; }
+
+    if (guessMon.id === answer.id) {
+      // Ganó — usar el lock para que solo el primero en llegar aquí quede marcado como ganador
+      const result = await withPokedleLock(channelName, async () => {
+        const freshRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+        const freshData = await freshRes.json();
+        const freshCfg = freshData?.[0]?.pokedle_config || {};
+        if (freshCfg.current_day !== todayRD() || freshCfg.solved_by) return { alreadySolved: true, winner: freshCfg.solved_by, attempts: freshCfg.attempts };
+
+        const newAttempts = (freshCfg.attempts || 0) + 1;
+        const wins = { ...(freshCfg.wins || {}) };
+        wins[username.toLowerCase()] = (wins[username.toLowerCase()] || 0) + 1;
+        const updated = { ...freshCfg, solved_by: username, solved_at: new Date().toISOString(), attempts: newAttempts, wins };
+
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pokedle_config: updated })
+        });
+        if (channelConfigs[channelName]) channelConfigs[channelName].pokedle_config = updated;
+
+        const viewerPoints = channelConfigs[channelName].viewer_points || {};
+        const userKey = username.toLowerCase();
+        viewerPoints[userKey] = (viewerPoints[userKey] || 0) + 100;
+        channelConfigs[channelName].viewer_points = viewerPoints;
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
+        });
+        return { alreadySolved: false, attempts: newAttempts };
+      });
+
+      if (result.alreadySolved) {
+        client.say(channel, `🔴 ¡Justo a tiempo! @${result.winner} se te adelantó por un pelito — el Pokédle de hoy ya se resolvió~ 🕷️`);
+        return;
+      }
+
+      const prompt = `¡El chat adivinó el Pokédle del día! Era "${answer.name}". Lo adivinó @${username} en ${result.attempts} intento${result.attempts===1?'':'s'} entre todos. Anúncialo emocionada con tu personalidad, en máximo 2 oraciones.`;
+      const msg = await getMuffetResponse(channelName, prompt, username);
+      client.say(channel, `🔴 ${msg}`);
+    } else {
+      // Aumentar contador de intentos (fire-and-forget, no crítico si se pisa alguna vez)
+      const bumpedCfg = { ...cfg, attempts: (cfg.attempts || 0) + 1 };
+      if (channelConfigs[channelName]) channelConfigs[channelName].pokedle_config = bumpedCfg;
+      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pokedle_config: bumpedCfg })
+      }).catch(() => {});
+      client.say(channel, `@${username} → ${pokedleClue(guessMon, answer)}`);
+    }
+    return;
+  }
+
+  // ── !pokedletop — ranking histórico de quién más días ha ganado el Pokédle ──
+  if (firstWord === '!pokedletop' || firstWord === '!pokedleranking') {
+    if (!isSysCmdEnabled(channelName, 'pokedle')) return;
+    const cfg = config.pokedle_config || {};
+    const wins = Object.entries(cfg.wins || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (!wins.length) { client.say(channel, `Aún nadie ha ganado el Pokédle~ 🔴🕷️`); return; }
+    const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+    client.say(channel, `🔴 Top Pokédle: ${wins.map(([u,c],i) => `${medals[i]} ${u} (${c}x)`).join(' | ')} 🕷️`);
+    return;
+  }
+
   if (firstWord === '!emojitop' || firstWord === '!emojiranking') {
     if (!isSysCmdEnabled(channelName, 'emojigame')) return;
     const viewerPointsAll = channelConfigs[channelName].viewer_points || {};
