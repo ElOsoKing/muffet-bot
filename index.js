@@ -49,6 +49,9 @@ function todayRD() {
 }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 let betCooldowns = {}; // { 'canal_usuario': timestamp } — anti-spam de !apostar
+const MIN_BITS_TO_THANK = 100; // mínimo de bits para que Muffet agradezca en el chat
+const BITS_THANK_COOLDOWN_MS = 10 * 60 * 1000; // no agradecer a la misma persona más de una vez cada 10 min
+let bitsThankCooldowns = {}; // { 'canal_usuario': timestamp }
 let activeDuels = {}; // { 'canal': { 'targetLower': { challenger, challengerDisplay, amount, timer } } }
 let emojiGameTimers = {}; // { 'elosoking1': timeoutId } — tiempo límite para revelar respuesta
 let emojiGameStreaks = {}; // { 'elosoking1': { 'username': count } } — racha de victorias consecutivas
@@ -3297,12 +3300,24 @@ function setupEvents(client) {
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const username = tags.username;
-    const bits = tags.bits;
+    const bits = parseInt(tags.bits) || 0;
+
+    // El subatón suma tiempo con cualquier cantidad de bits — no depende del mínimo para agradecer
     const cfg = channelConfigs[ch]?.subathon_config || {};
     if (cfg.bits_unit > 0) {
       const units = Math.floor(bits / cfg.bits_unit);
       addSubathonTime(client, channel, ch, units * (cfg.minutes_per_bits_unit || 0), `${bits} bits de @${username}`, username);
     }
+
+    // Solo agradecer si son al menos MIN_BITS_TO_THANK bits
+    if (bits < MIN_BITS_TO_THANK) return;
+
+    // No agradecer a la misma persona más de una vez cada BITS_THANK_COOLDOWN_MS
+    const thankKey = `${ch}_${username.toLowerCase()}`;
+    const lastThanked = bitsThankCooldowns[thankKey] || 0;
+    if (Date.now() - lastThanked < BITS_THANK_COOLDOWN_MS) return;
+    bitsThankCooldowns[thankKey] = Date.now();
+
     const msg = await getMuffetResponse(ch, `@${username} acaba de donar ${bits} bits al canal. Agradécele con entusiasmo.`, username);
     botSay(client, channel, msg, true);
   });
