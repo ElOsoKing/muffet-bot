@@ -101,6 +101,7 @@ async function loadAllChannels() {
         on_message:    s.on_message    || null,
         off_message:   s.off_message   || null,
         counters:           s.counters           || {},
+        counters_permission: s.counters_permission || ['mod'],
         points_config:      s.points_config      || {},
         viewer_points:      (() => {
           const vp = s.viewer_points || {};
@@ -2272,8 +2273,17 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   const counterName = firstWord.startsWith('!') ? firstWord.slice(1).toLowerCase() : null;
   const counters = channelConfigs[channelName]?.counters || {};
   if (counterName && counters[counterName] !== undefined) {
-    if (!isMod(tags, channelName) && message.trim().split(' ').length > 1) return; // Solo mods pueden modificar
     const parts = message.trim().split(' ');
+    const wantsToModify = parts.length > 1;
+    if (wantsToModify && !isMod(tags, channelName)) {
+      const allowed = channelConfigs[channelName]?.counters_permission || ['mod'];
+      if (!allowed.includes('everyone')) {
+        const isSubUser = !!tags.subscriber || !!tags.badges?.subscriber;
+        const isVIPUser = !!tags.badges?.vip;
+        const canUse = (allowed.includes('sub') && isSubUser) || (allowed.includes('vip') && isVIPUser);
+        if (!canUse) return; // sin permiso — se ignora en silencio, igual que antes con mods
+      }
+    }
     const arg = parts[1]?.toLowerCase();
     let value = counters[counterName];
 
