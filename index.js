@@ -840,18 +840,43 @@ ${usedList ? `NO repitas estos títulos ya usados, y evita el mismo estilo/franq
   }
 }
 
-async function getMuffetResponse(channel, userMessage, username) {
+// Largo máximo (en caracteres) de los mensajes de eventos — subs, regalos, bits, follows, raids
+const EVENT_MSG_MAX_CHARS = 160;
+
+// Recorta un texto al límite, preferiblemente en el último fin de oración; si no, en la última palabra completa
+function trimToLength(text, maxChars) {
+  if (!text || text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const lastEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (lastEnd >= maxChars * 0.5) {
+    // Conservar los emojis que van justo después del signo de puntuación (dan personalidad)
+    let end = lastEnd + 1;
+    const emojiTail = cut.slice(end).match(/^\s+([^\p{L}\p{N}\s]+)(?=\s|$)/u);
+    if (emojiTail) end += emojiTail[0].length;
+    return cut.slice(0, end);
+  }
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut) + '…';
+}
+
+async function getMuffetResponse(channel, userMessage, username, opts = {}) {
   try {
     const config = channelConfigs[channel] || defaultConfig(channel);
     const history = chatHistory[channel] || [];
+    const maxChars = opts.maxChars || null;
 
     // Agregar mensaje del usuario al historial
     addToHistory(channel, 'user', `${username}: ${userMessage}`);
 
+    // Si se pidió un largo máximo, se le avisa a la IA solo para esta respuesta (no se guarda en el historial)
+    const systemPrompt = maxChars
+      ? `${config.bot_prompt}\n\nPara ESTA respuesta: una sola oración corta, máximo ${maxChars} caracteres en total, incluyendo emojis.`
+      : config.bot_prompt;
+
     const completion = await groq.chat.completions.create({
       model: 'openai/gpt-oss-20b',
       messages: [
-        { role: 'system', content: config.bot_prompt },
+        { role: 'system', content: systemPrompt },
         ...history.map(h => ({ role: h.role, content: h.content })),
       ],
       max_tokens: 400,
@@ -859,7 +884,8 @@ async function getMuffetResponse(channel, userMessage, username) {
       reasoning_effort: 'low',
     });
 
-    const response = completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🕷️';
+    let response = completion.choices[0]?.message?.content || '¡Algo salió mal en la cueva! 🕷️';
+    if (maxChars) response = trimToLength(response, maxChars); // red de seguridad si la IA se pasa del límite
 
     // Agregar respuesta al historial
     addToHistory(channel, 'assistant', response);
@@ -3240,7 +3266,7 @@ function setupEvents(client) {
     // Suprimir saludos individuales por 90s — que Muffet reciba a la raid en conjunto, no raider por raider
     raidSuppressGreetings[ch] = Date.now() + 90000;
     // El saludo de raid NO usa canAiRespond — es un evento importante y no debe perderse por el cooldown
-    const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username);
+    const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username, { maxChars: EVENT_MSG_MAX_CHARS });
     botSay(client, channel, msg, true);
   });
 
@@ -3253,7 +3279,7 @@ function setupEvents(client) {
     const cfg = channelConfigs[ch]?.subathon_config || {};
     addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `sub ${tier} de @${username}`, username);
     // Sin canAiRespond — las subs son eventos importantes y no deben perderse por el cooldown
-    const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username);
+    const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username, { maxChars: EVENT_MSG_MAX_CHARS });
     botSay(client, channel, msg, true);
   });
 
@@ -3264,43 +3290,67 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `resub de @${username}`, username);
-    const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username);
+    const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username, { maxChars: EVENT_MSG_MAX_CHARS });
     botSay(client, channel, msg, true);
   });
 
-  // Sub gift individual
-  // Buffer para ignorar subgift individuales cuando son parte de un mystery gift
+  // ── Regalos de subs: Muffet agradece UNA sola vez, solo a quien regala (nunca a cada receptor) ──
+  // Un regalo masivo llega como 1 aviso general (submysterygift) + N avisos individuales (subgift).
+  // Los individuales que pertenecen a un regalo masivo se ignoran: se detectan por las etiquetas de Twitch
+  // (msg-param-community-gift-id / msg-param-origin-id) y, como respaldo, por una ventana de 10s.
   const mysteryGiftBuffer = {}; // { 'ch_username': timestamp }
+  const massGiftOrigins = new Set(); // origin-id de regalos masivos recientes
+  const isAnonGifter = (name) => (name || '').toLowerCase() === 'ananonymousgifter';
 
-  client.on('submysterygift', async (channel, username, numbOfSubs, methods) => {
+  client.on('submysterygift', async (channel, username, numbOfSubs, methods, tags) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
-    // Marcar que este usuario está haciendo mystery gift — ignorar subgifts individuales por 10s
+    // Marcar el regalo masivo para que sus avisos individuales no se procesen
     mysteryGiftBuffer[`${ch}_${username}`] = Date.now();
+    const originId = tags?.['msg-param-origin-id'];
+    if (originId) {
+      massGiftOrigins.add(originId);
+      setTimeout(() => massGiftOrigins.delete(originId), 10 * 60 * 1000);
+    }
+    const anon = isAnonGifter(username);
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     const minutesEach = cfg[`minutes_per_sub_t${tierNum}`] || 0;
-    addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de @${username}`, username);
-    const msg = await getMuffetResponse(ch, `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`, username);
+    console.log(`[gift] Regalo masivo en #${ch}: ${anon ? 'anónimo' : username} regaló ${numbOfSubs} subs Tier ${tierNum} (origin-id: ${originId || 'sin etiqueta'})`);
+    // Los anónimos suman tiempo al subatón, pero no entran al ranking de contribuidores
+    addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    const prompt = anon
+      ? `Alguien anónimo acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona el número exacto (${numbOfSubs}) y agradécele su generosidad, sin mencionar ningún nombre de usuario.`
+      : `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`;
+    const msg = await getMuffetResponse(ch, prompt, username, { maxChars: EVENT_MSG_MAX_CHARS });
     botSay(client, channel, msg, true);
   });
 
-  // IMPORTANTE: tmi.js pasa streakMonths ANTES de recipient — (channel, username, streakMonths, recipient, methods, userstate)
-  client.on('subgift', async (channel, username, streakMonths, recipient, methods) => {
+  // IMPORTANTE: tmi.js pasa streakMonths ANTES de recipient — (channel, username, streakMonths, recipient, methods, tags)
+  client.on('subgift', async (channel, username, streakMonths, recipient, methods, tags) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
-    if (username === 'ananonymousgifter') return;
-    // Si es parte de un mystery gift reciente, ignorar
+
+    // ¿Este aviso individual es parte de un regalo masivo? Entonces ya se agradeció con el aviso general — ignorar
+    const communityId = tags?.['msg-param-community-gift-id'];
+    const originId = tags?.['msg-param-origin-id'];
+    if (communityId || (originId && massGiftOrigins.has(originId))) return;
+    // Respaldo por tiempo, por si Twitch no manda las etiquetas
     const bufferKey = `${ch}_${username}`;
     if (mysteryGiftBuffer[bufferKey] && Date.now() - mysteryGiftBuffer[bufferKey] < 10000) return;
-    // Si recipient es inválido ignorar
+
     if (!recipient || recipient === '0' || recipient === 'anonymous') return;
+    const anon = isAnonGifter(username);
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `gift sub Tier ${tierNum} de @${username}`, username);
-    const msg = await getMuffetResponse(ch, `@${username} le acaba de regalar una suscripción a @${recipient}. Menciona los dos nombres y agradécele lo generoso que es.`, username);
+    addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    // Solo se agradece a quien regala — el receptor no se menciona
+    const prompt = anon
+      ? `Alguien anónimo acaba de regalar una suscripción a un viewer del chat. Agradécele su generosidad, sin mencionar ningún nombre de usuario.`
+      : `@${username} acaba de regalar una suscripción a un viewer del chat. Menciona solo su nombre y agradécele lo generoso que es.`;
+    const msg = await getMuffetResponse(ch, prompt, username, { maxChars: EVENT_MSG_MAX_CHARS });
     botSay(client, channel, msg, true);
   });
 
@@ -3328,7 +3378,7 @@ function setupEvents(client) {
     if (Date.now() - lastThanked < BITS_THANK_COOLDOWN_MS) return;
     bitsThankCooldowns[thankKey] = Date.now();
 
-    const msg = await getMuffetResponse(ch, `@${username} acaba de donar ${bits} bits al canal. Agradécele con entusiasmo.`, username);
+    const msg = await getMuffetResponse(ch, `@${username} acaba de donar ${bits} bits al canal. Agradécele con entusiasmo.`, username, { maxChars: EVENT_MSG_MAX_CHARS });
     botSay(client, channel, msg, true);
   });
 }
@@ -3579,7 +3629,7 @@ function queueFollowThanks(channelName) {
     try {
       let msg;
       if (total === 1) {
-        msg = await getMuffetResponse(channelName, `¡${names[0]} acaba de seguir el canal! Agradécele el follow brevemente con tu personalidad.`, names[0]);
+        msg = await getMuffetResponse(channelName, `¡${names[0]} acaba de seguir el canal! Agradécele el follow brevemente con tu personalidad.`, names[0], { maxChars: EVENT_MSG_MAX_CHARS });
       } else {
         const lista = names.map(n => `@${n}`).join(', ');
         msg = `💜 ¡Gracias por el follow ${lista}${total > names.length ? ` y ${total - names.length} más` : ''}! Bienvenid@s~ 🕷️`;
