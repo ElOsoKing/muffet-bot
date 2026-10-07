@@ -49,6 +49,7 @@ function todayRD() {
 }
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 let betCooldowns = {}; // { 'canal_usuario': timestamp } — anti-spam de !apostar
+let raffleCommandHintAt = {}; // { 'canal': timestamp } — evita spamear el aviso de "este sorteo es por canje"
 const MIN_BITS_TO_THANK = 100; // mínimo de bits para que Muffet agradezca en el chat
 const BITS_THANK_COOLDOWN_MS = 10 * 60 * 1000; // no agradecer a la misma persona más de una vez cada 10 min
 let bitsThankCooldowns = {}; // { 'canal_usuario': timestamp }
@@ -2577,8 +2578,12 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ raffle_active: { active: true, prize, participants: [], started_at: new Date().toISOString() } })
         });
-        const joinCmd = channelConfigs[channelName]?.raffle_settings?.join_cmd || '!entrar';
-        client.say(channel, `🎉 ¡Sorteo iniciado! Premio: ${prize} 🏆 Escribe ${joinCmd} para participar~ 🕷️`);
+        const rs = channelConfigs[channelName]?.raffle_settings || {};
+        const joinCmd = rs.join_cmd || '!entrar';
+        const joinHow = rs.entry_mode === 'reward'
+          ? `Canjea "${rs.reward_name || 'la recompensa del sorteo'}" con tus puntos del canal para participar`
+          : `Escribe ${joinCmd} para participar`;
+        client.say(channel, `🎉 ¡Sorteo iniciado! Premio: ${prize} 🏆 ${joinHow}~ 🕷️`);
       } catch(e) { client.say(channel, '⚠️ Error al iniciar el sorteo'); }
       return;
     }
@@ -2632,6 +2637,17 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       const data = await res.json();
       const raffle = data?.[0]?.raffle_active || {};
       if (!raffle.active) return;
+
+      // Sorteo solo por canje: el comando queda bloqueado (se avisa, sin spamear)
+      if (raffleConfig?.raffle_settings?.entry_mode === 'reward') {
+        const lastHint = raffleCommandHintAt[channelName] || 0;
+        if (Date.now() - lastHint > 15000) {
+          raffleCommandHintAt[channelName] = Date.now();
+          const rewardName = raffleConfig.raffle_settings.reward_name || 'la recompensa del sorteo';
+          client.say(channel, `@${username} En este sorteo se entra canjeando "${rewardName}" con tus puntos del canal, no con comando~ 🎁🕷️`);
+        }
+        return;
+      }
 
       const participants = raffle.participants || [];
       if (participants.includes(username)) { client.say(channel, `@${username} ¡Ya estás participando, dearie! 🕷️`); return; }
