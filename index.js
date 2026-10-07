@@ -2599,10 +2599,9 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
           method: 'PATCH',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ raffle_active: { active: false, prize: raffle.prize, winner, participants: [] } })
+          body: JSON.stringify({ raffle_active: { active: false, prize: raffle.prize, winner, participants: [], ended_at: new Date().toISOString() } })
         });
-        const winnerMsg = await getMuffetResponse(channelName, `Anuncia que @${winner} ganó el sorteo. El premio es: ${raffle.prize}. IMPORTANTE: menciona el nombre @${winner} explícitamente.`, winner);
-        client.say(channel, `@${winner} ${winnerMsg}`);
+        await announceRaffleWinner(channelName); // una sola vez, aunque también lo detecte el revisor
       } catch(e) { client.say(channel, '⚠️ Error al terminar el sorteo'); }
       return;
     }
@@ -3703,13 +3702,7 @@ async function handleTwitchEvent(type, event) {
   if (type === 'raffle.winner') {
     const channelName = event.broadcaster_user_login?.toLowerCase();
     if (!channelName) return;
-    const client = customClients[channelName] || mainClient;
-    try {
-      const winnerMsg = await getMuffetResponse(channelName, `¡Anuncia emocionado que @${event.winner} ganó el sorteo! El premio es: ${event.prize}. Sé entusiasta y usa tu personalidad.`, event.winner);
-      client.say(`#${channelName}`, `@${event.winner} ${winnerMsg}`);
-    } catch(e) {
-      client.say(`#${channelName}`, `🎉 ¡El ganador del sorteo es @${event.winner}! Premio: ${event.prize} 🏆🕷️`);
-    }
+    await announceRaffleWinner(channelName); // se anuncia una sola vez, aunque también lo detecte el revisor
     return;
   }
   const channelName = event.broadcaster_user_login?.toLowerCase();
@@ -3741,9 +3734,50 @@ async function handleTwitchEvent(type, event) {
   } catch(e) {}
 }
 
-// ── Polling de ganadores de sorteo ──
-const announcedWinners = {};
+// ── Anuncio de ganadores de sorteo ──
+// Cada resultado se anuncia UNA sola vez, venga del evento del dashboard, de "!sorteo end" o del revisor.
+// Se "reclama" en Supabase (raffle_active.announced) antes de enviarlo, así no se repite entre fuentes
+// ni después de un reinicio del bot (el estado en memoria se pierde, el de la base de datos no).
+const RAFFLE_ANNOUNCE_MAX_AGE_MS = 5 * 60 * 1000; // solo se anuncian resultados recientes — nunca ganadores viejos
+const announcedWinners = {}; // { canal: id del resultado } — freno local extra
 
+async function announceRaffleWinner(ch) {
+  return withChannelLock(`raffle_announce_${ch}`, async () => {
+    try {
+      if (!channelConfigs[ch]) return;
+      const headers = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}&select=raffle_active&limit=1`, { headers });
+      const raffle = (await res.json())?.[0]?.raffle_active || {};
+      if (!raffle.winner || raffle.active || raffle.announced) return; // sin resultado, sorteo en curso o ya anunciado
+
+      // Solo resultados recientes. Sin fecha o viejos = ganadores de sorteos pasados: no se anuncian
+      const age = Date.now() - new Date(raffle.ended_at || 0).getTime();
+      if (!raffle.ended_at || age > RAFFLE_ANNOUNCE_MAX_AGE_MS || age < -60000) return;
+
+      const resultId = `${ch}_${raffle.winner}_${raffle.ended_at}`;
+      if (announcedWinners[ch] === resultId) return;
+
+      // Reclamar el anuncio ANTES de enviarlo. Si no se puede guardar, no se anuncia (se reintenta en el próximo ciclo)
+      const claim = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raffle_active: { ...raffle, announced: true } })
+      });
+      if (!claim.ok) { console.error(`[raffle] No se pudo reclamar el anuncio del ganador en #${ch} (status ${claim.status}) — se reintenta`); return; }
+      announcedWinners[ch] = resultId;
+
+      const client = customClients[ch] || mainClient;
+      try {
+        const msg = await getMuffetResponse(ch, `Anuncia que @${raffle.winner} ganó el sorteo. El premio es: ${raffle.prize}. IMPORTANTE: menciona el nombre @${raffle.winner} explícitamente en tu respuesta.`, raffle.winner);
+        client.say(`#${ch}`, `@${raffle.winner} ${msg}`);
+      } catch(e) {
+        client.say(`#${ch}`, `🎉 ¡El ganador del sorteo es @${raffle.winner}! Premio: ${raffle.prize} 🏆🕷️`);
+      }
+    } catch(e) { console.error('[raffle] Error al anunciar ganador:', e.message); }
+  });
+}
+
+// Revisor: red de seguridad por si el evento del dashboard no llegó (por ejemplo, el bot estaba reiniciándose)
 async function checkRaffleWinners() {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,raffle_active`,
@@ -3753,18 +3787,9 @@ async function checkRaffleWinners() {
     for (const s of streamers) {
       const ch = s.twitch_username?.toLowerCase();
       const raffle = s.raffle_active;
-      if (!ch || !raffle?.winner || raffle.active) continue;
-      const winnerId = `${ch}_${raffle.winner}_${raffle.ended_at||''}`;
-      if (announcedWinners[ch] === winnerId) continue;
-      announcedWinners[ch] = winnerId;
-      if (!channelConfigs[ch]) continue;
-      const client = customClients[ch] || mainClient;
-      try {
-        const msg = await getMuffetResponse(ch, `Anuncia que @${raffle.winner} ganó el sorteo. El premio es: ${raffle.prize}. IMPORTANTE: menciona el nombre @${raffle.winner} explícitamente en tu respuesta.`, raffle.winner);
-        client.say(`#${ch}`, `@${raffle.winner} ${msg}`);
-      } catch(e) {
-        client.say(`#${ch}`, `🎉 ¡El ganador del sorteo es @${raffle.winner}! Premio: ${raffle.prize} 🏆🕷️`);
-      }
+      if (!ch || !raffle?.winner || raffle.active || raffle.announced || !raffle.ended_at) continue;
+      if (Date.now() - new Date(raffle.ended_at).getTime() > RAFFLE_ANNOUNCE_MAX_AGE_MS) continue; // ganador viejo: ignorar
+      await announceRaffleWinner(ch);
     }
   } catch(e) {}
 }
