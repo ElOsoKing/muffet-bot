@@ -127,6 +127,7 @@ async function loadAllChannels() {
         system_commands:    s.system_commands    || {},
         primerin_config:    s.primerin_config    || {},
         pokedle_config:     s.pokedle_config     || {},
+        dbdle_config:       s.dbdle_config       || {},
         subathon_config:    s.subathon_config    || {},
         live_announcement:  s.live_announcement  || { enabled: false },
         youtube_music_config: s.youtube_music_config || {},
@@ -761,6 +762,102 @@ async function ensureTodayPokedle(channelName) {
     });
     if (channelConfigs[channelName]) channelConfigs[channelName].pokedle_config = updated;
     console.log(`[pokedle] Nuevo reto del día en #${channelName}: #${chosen.id} ${chosen.name}`);
+    return updated;
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DBDle — asesino del día de Dead by Daylight (solo canales habilitados mientras se prueba)
+// Datos curados a mano (nunca imágenes ni audios oficiales). Editar la lista cuando salga un capítulo nuevo.
+// ═══════════════════════════════════════════════════════════════
+const DBDLE_CHANNELS = ['elosoking1', 'lordlonelywolf'];
+const DBDLE_POINTS = 100;
+const DBDLE_KILLERS = [{"name":"The Trapper","es":"El Trampero","aliases":["Trapper","Trampero"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2016},{"name":"The Wraith","es":"El Espectro","aliases":["Espectro","Campanita"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Nigeriano"],"year":2016},{"name":"The Hillbilly","es":"El Pueblerino","aliases":["HillBilly","Pueblerino"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2016},{"name":"The Nurse","es":"La Enfermera","aliases":["Enfermera","Nurse"],"gender":"Mujer","height":"Media","radius":[32.0],"speed":[3.85],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense","Inglés"],"year":2016},{"name":"The Shape","es":"La Forma","aliases":["Myers","Michael Myers"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.4],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2016},{"name":"The Hag","es":"La Bruja","aliases":["Bruja","Hag"],"gender":"Mujer","height":"Media","radius":[24.0],"speed":[4.4],"range":["Cuerpo a cuerpo"],"origin":["Afroamericano","Estadounidense"],"year":2016},{"name":"The Doctor","es":"El Doctor","aliases":["Doc","Doctor"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Africano"],"year":2017},{"name":"The Huntress","es":"La Cazadora","aliases":["Huntress","Cazadora"],"gender":"Mujer","height":"Alta","radius":[20.0,45.0],"speed":[4.4,3.08],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Ruso"],"year":2017},{"name":"The Cannibal","es":"El Canibal","aliases":["Bubba","Canibal"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2017},{"name":"The Nightmare","es":"La Pesadilla","aliases":["Pesadilla","Freddy"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2017},{"name":"The Pig","es":"La Cerda","aliases":["Cerda"],"gender":"Mujer","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2018},{"name":"The Clown","es":"El Payaso","aliases":["Payaso"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2018},{"name":"The Spirit","es":"La Espiritu","aliases":["Spirit","Espiritu"],"gender":"Mujer","height":"Media","radius":[24.0],"speed":[4.4],"range":["Cuerpo a cuerpo"],"origin":["Japonés"],"year":2018},{"name":"The Legion","es":"La Legion","aliases":["Legion"],"gender":"Otro","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Canadiense"],"year":2018},{"name":"The Plague","es":"La Plaga","aliases":["Plaga"],"gender":"Mujer","height":"Alta","radius":[32.0],"speed":[4.6],"range":["A distancia"],"origin":["Babilonia"],"year":2019},{"name":"The Ghost Face","es":"Ghost Face","aliases":["Ghosty"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2019},{"name":"The Demogorgon","es":"Demogorgon","aliases":["Demo"],"gender":"Otro","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Ninguno"],"year":2019},{"name":"The Oni","es":"Oni","aliases":[],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Japonés"],"year":2019},{"name":"The Deathslinger","es":"El Arponero","aliases":["Arponero"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.4],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2020},{"name":"The Executioner","es":"El Ejecutor","aliases":["Dorito","Pyramid Head"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["A distancia"],"origin":["Ninguno"],"year":2020},{"name":"The Blight","es":"El Deterioro","aliases":["Deterioro","Dete"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Escocés"],"year":2020},{"name":"The Twins","es":"Los Mellizos","aliases":["Mellizos"],"gender":"Mujer","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Francés"],"year":2020},{"name":"The Trickster","es":"El Traicionero","aliases":["Trickster"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.6],"range":["A distancia"],"origin":["Corea del Sur"],"year":2021},{"name":"The Nemesis","es":"Nemesis","aliases":[],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Ninguno"],"year":2021},{"name":"The Cenobite","es":"El Cenobita","aliases":["Cenobita"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Británico"],"year":2021},{"name":"The Artist","es":"La Artista","aliases":["Artista"],"gender":"Mujer","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Chileno"],"year":2021},{"name":"The Onryō","es":"La Onryō","aliases":["Onryo"],"gender":"Mujer","height":"Baja","radius":[24.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Japonés"],"year":2022},{"name":"The Dredge","es":"La Draga","aliases":["Draga"],"gender":"Otro","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Ninguno"],"year":2022},{"name":"The Mastermind","es":"El Cerebro","aliases":["Wesker"],"gender":"Hombre","height":"Media","radius":[40.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2022},{"name":"The Knight","es":"El Caballero","aliases":["Caballero"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Húngaro"],"year":2022},{"name":"The Skull Merchant","es":"La Comerciante de Calaveras","aliases":["Comerciante"],"gender":"Mujer","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Brasileño"],"year":2023},{"name":"The Singularity","es":"La singularidad","aliases":["Singu","Singularidad"],"gender":"Otro","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Ninguno"],"year":2023},{"name":"The Xenomorph","es":"El xenomorpho","aliases":["Xeno"],"gender":"Otro","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo"],"origin":["Ninguno"],"year":2023},{"name":"The Good Guy","es":"El Chico Bueno","aliases":["Chucky"],"gender":"Hombre","height":"Baja","radius":[32.0],"speed":[4.4],"range":["Cuerpo a cuerpo"],"origin":["Estadounidense"],"year":2023},{"name":"The Unknown","es":"El Desconocido","aliases":["Desconocido"],"gender":"Otro","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Ninguno"],"year":2024},{"name":"The Lich","es":"El Liche","aliases":["Liche"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Oerth"],"year":2024},{"name":"The Dark Lord","es":"El Señor Oscuro","aliases":["Dracula"],"gender":"Hombre","height":"Alta","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Rumano"],"year":2024},{"name":"The Houndmaster","es":"La Adiestradora","aliases":["Perrera"],"gender":"Mujer","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Caribe"],"year":2024},{"name":"The Ghoul","es":"El Ghoul","aliases":["Kaneki"],"gender":"Hombre","height":"Media","radius":[40.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Japonés"],"year":2025},{"name":"The Animatronic","es":"El Animatronico","aliases":["Springtrap"],"gender":"Hombre","height":"Media","radius":[24.0],"speed":[4.4],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Británico"],"year":2025},{"name":"The Krasue","es":"La Krasue","aliases":["Krasue"],"gender":"Mujer","height":"Media","radius":[32.0],"speed":[4.6],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Trailandés"],"year":2025},{"name":"The First","es":"El Uno","aliases":["Vecna"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.4],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Estadounidense"],"year":2026},{"name":"The Slasher","es":"El Acuchillador","aliases":["Jason"],"gender":"Hombre","height":"Media","radius":[32.0],"speed":[4.4],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Estadounidense"],"year":2026},{"name":"The Judgment","es":"El Juicio","aliases":["Juicio"],"gender":"Otro","height":"Alta","radius":[32.0],"speed":[4.4],"range":["Cuerpo a cuerpo","A distancia"],"origin":["Celestial"],"year":2026}];
+
+function normalizeKillerName(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/^(the|el|la|los|las)\s+/, '').replace(/[^a-z0-9ñ ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+let dbdleIndexCache = null;
+function findDbdleKiller(input) {
+  if (!dbdleIndexCache) {
+    dbdleIndexCache = new Map();
+    for (const k of DBDLE_KILLERS) {
+      [k.name, k.es, ...(k.aliases || [])].forEach(n => {
+        const key = normalizeKillerName(n);
+        if (key && !dbdleIndexCache.has(key)) dbdleIndexCache.set(key, k);
+      });
+    }
+  }
+  return dbdleIndexCache.get(normalizeKillerName(input)) || null;
+}
+
+function dbdleShortName(k) { return k.name.replace(/^The\s+/i, ''); }
+
+// Compara listas de valores: idénticas = 🟩, comparten algo = 🟨, nada en común = 🟥
+function dbdleListIcon(guessArr, answerArr) {
+  const g = new Set(guessArr.map(v => String(v).toLowerCase()));
+  const a = new Set(answerArr.map(v => String(v).toLowerCase()));
+  const same = g.size === a.size && [...g].every(v => a.has(v));
+  if (same) return '🟩';
+  return [...g].some(v => a.has(v)) ? '🟨' : '🟥';
+}
+
+function dbdleClue(guess, answer) {
+  const genderIcon = guess.gender === answer.gender ? '🟩' : '🟥';
+  const heightIcon = guess.height === answer.height ? '🟩' : '🟥';
+  const yearIcon = guess.year === answer.year ? '🟩' : guess.year < answer.year ? '🔼' : '🔽';
+  const radius = guess.radius.join('/') + 'm';
+  const speed = guess.speed.join('/') + 'm/s';
+  const range = guess.range.map(r => r === 'Cuerpo a cuerpo' ? 'Melee' : 'Distancia').join('+');
+  const origin = guess.origin.join('/') || '—';
+  return `${dbdleShortName(guess)}: ${guess.gender} ${genderIcon} | Radio ${radius} ${dbdleListIcon(guess.radius, answer.radius)} | Vel ${speed} ${dbdleListIcon(guess.speed, answer.speed)} | ${range} ${dbdleListIcon(guess.range, answer.range)} | Altura ${guess.height} ${heightIcon} | Origen ${origin} ${dbdleListIcon(guess.origin, answer.origin)} | Año ${guess.year} ${yearIcon}`;
+}
+
+async function readDbdleConfig(channelName) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=dbdle_config&limit=1`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+  const data = await res.json();
+  if (!res.ok || !Array.isArray(data)) throw new Error(`dbdle_config no disponible (${res.status}) — ¿existe la columna en Supabase?`);
+  return data?.[0]?.dbdle_config || {};
+}
+
+async function saveDbdleConfig(channelName, cfg) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+    method: 'PATCH',
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dbdle_config: cfg })
+  });
+  if (!res.ok) throw new Error(`No se pudo guardar dbdle_config (${res.status})`);
+  if (channelConfigs[channelName]) channelConfigs[channelName].dbdle_config = cfg;
+}
+
+// Lock por canal — evita que dos personas acertando casi a la vez queden ambas como ganadoras
+const dbdleLocks = {};
+function withDbdleLock(channelName, fn) {
+  const prev = dbdleLocks[channelName] || Promise.resolve();
+  const next = prev.then(fn, fn);
+  dbdleLocks[channelName] = next.catch(() => {});
+  return next;
+}
+
+// Asegura el reto del día — si cambió el día (hora RD) elige un asesino nuevo sin repetir hasta agotar la lista
+async function ensureTodayDbdle(channelName) {
+  return withDbdleLock(channelName, async () => {
+    const cfg = await readDbdleConfig(channelName);
+    const today = todayRD();
+    if (cfg.current_day === today && DBDLE_KILLERS.some(k => k.name === cfg.current_killer)) return cfg;
+
+    let used = Array.isArray(cfg.used) ? cfg.used.filter(n => DBDLE_KILLERS.some(k => k.name === n)) : [];
+    let pool = DBDLE_KILLERS.filter(k => !used.includes(k.name));
+    if (!pool.length) { used = []; pool = DBDLE_KILLERS; }
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    used.push(chosen.name);
+
+    const updated = { ...cfg, current_day: today, current_killer: chosen.name, solved_by: null, solved_at: null, attempts: 0, used, wins: cfg.wins || {} };
+    await saveDbdleConfig(channelName, updated);
+    console.log(`[dbdle] Nuevo reto del día en #${channelName}: ${chosen.name}`);
     return updated;
   });
 }
@@ -2948,6 +3045,81 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       }).catch(() => {});
       client.say(channel, `@${username} → ${pokedleClue(guessMon, answer)}`);
     }
+    return;
+  }
+
+  // ── !dbdle — el asesino del día de Dead by Daylight (todo el chat compite) ──
+  if (firstWord === '!dbdle') {
+    if (!DBDLE_CHANNELS.includes(channelName)) return;
+    if (!isSysCmdEnabled(channelName, 'dbdle')) return;
+
+    const guessName = message.trim().split(/\s+/).slice(1).join(' ').trim();
+    let cfg;
+    try { cfg = await ensureTodayDbdle(channelName); }
+    catch (e) { console.error('[dbdle] error:', e.message); client.say(channel, `@${username} No pude cargar el DBDle de hoy, intenta en un momento~ 🕷️`); return; }
+
+    const answer = DBDLE_KILLERS.find(k => k.name === cfg.current_killer);
+    if (!answer) { client.say(channel, `@${username} Error interno con el DBDle de hoy~ 🕷️`); return; }
+
+    if (cfg.solved_by) {
+      client.say(channel, `🔪 El DBDle de hoy ya lo adivinó @${cfg.solved_by} (${cfg.attempts} intento${cfg.attempts===1?'':'s'} entre todos) — ¡vuelve mañana! 🕷️`);
+      return;
+    }
+    if (!guessName) {
+      client.say(channel, `🔪 ¡Hay un DBDle activo hoy! Adivina el asesino con !dbdle <nombre> — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'}. 🟩 igual · 🟨 parcial · 🟥 distinto · 🔼🔽 el año es mayor/menor 🕷️`);
+      return;
+    }
+
+    const guessKiller = findDbdleKiller(guessName);
+    if (!guessKiller) { client.say(channel, `@${username} No reconozco ese asesino — revisa cómo lo escribiste (sirve en inglés o español)~ 🕷️`); return; }
+
+    if (guessKiller.name === answer.name) {
+      let result;
+      try {
+        result = await withDbdleLock(channelName, async () => {
+          const fresh = await readDbdleConfig(channelName);
+          if (fresh.current_day !== todayRD() || fresh.solved_by) return { alreadySolved: true, winner: fresh.solved_by, attempts: fresh.attempts };
+          const newAttempts = (fresh.attempts || 0) + 1;
+          const wins = { ...(fresh.wins || {}) };
+          const key = username.toLowerCase();
+          wins[key] = (wins[key] || 0) + 1;
+          await saveDbdleConfig(channelName, { ...fresh, solved_by: username, solved_at: new Date().toISOString(), attempts: newAttempts, wins });
+
+          const viewerPoints = channelConfigs[channelName].viewer_points || {};
+          viewerPoints[key] = (viewerPoints[key] || 0) + DBDLE_POINTS;
+          channelConfigs[channelName].viewer_points = viewerPoints;
+          await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+            method: 'PATCH',
+            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
+          });
+          return { alreadySolved: false, attempts: newAttempts };
+        });
+      } catch (e) { console.error('[dbdle] error al registrar ganador:', e.message); client.say(channel, `@${username} Algo falló al registrar tu acierto, avísale al streamer~ 🕷️`); return; }
+
+      if (result.alreadySolved) {
+        client.say(channel, `🔪 ¡Justo a tiempo! @${result.winner} se te adelantó por un pelito — el DBDle de hoy ya se resolvió~ 🕷️`);
+        return;
+      }
+      const prompt = `¡El chat adivinó el DBDle del día! Era "${dbdleShortName(answer)}". Lo adivinó @${username} en ${result.attempts} intento${result.attempts===1?'':'s'} entre todos y gana ${DBDLE_POINTS} puntos. Anúncialo emocionada con tu personalidad, en máximo 2 oraciones.`;
+      const msg = await getMuffetResponse(channelName, prompt, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡@${username} adivinó a ${dbdleShortName(answer)} en ${result.attempts} intento${result.attempts===1?'':'s'}! 🕷️` });
+      client.say(channel, `🔪 ${msg}`);
+    } else {
+      const bumped = { ...cfg, attempts: (cfg.attempts || 0) + 1 };
+      saveDbdleConfig(channelName, bumped).catch(() => {});
+      client.say(channel, `@${username} → ${dbdleClue(guessKiller, answer)}`);
+    }
+    return;
+  }
+
+  // ── !dbdletop — ranking histórico de quién más días ha ganado el DBDle ──
+  if (firstWord === '!dbdletop' || firstWord === '!dbdleranking') {
+    if (!DBDLE_CHANNELS.includes(channelName)) return;
+    if (!isSysCmdEnabled(channelName, 'dbdle')) return;
+    const wins = Object.entries((config.dbdle_config || {}).wins || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (!wins.length) { client.say(channel, `Aún nadie ha ganado el DBDle~ 🔪🕷️`); return; }
+    const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+    client.say(channel, `🔪 Top DBDle: ${wins.map(([u,c],i) => `${medals[i]} ${u} (${c}x)`).join(' | ')} 🕷️`);
     return;
   }
 
