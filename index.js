@@ -47,6 +47,19 @@ function todayRD() {
   const rdMs = Date.now() - 4 * 60 * 60 * 1000;
   return new Date(rdMs).toISOString().slice(0, 10); // YYYY-MM-DD
 }
+
+// Retos de Pokédle/DBDle: cambian cada 12 horas (medianoche y mediodía, hora RD) — la clave incluye la mitad del día
+function currentRetoKey() {
+  const rd = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  return `${rd.toISOString().slice(0, 10)}-${rd.getUTCHours() < 12 ? 'am' : 'pm'}`;
+}
+function nextRetoInText() {
+  const rd = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  const minsIntoHalf = (rd.getUTCHours() % 12) * 60 + rd.getUTCMinutes();
+  const left = 12 * 60 - minsIntoHalf;
+  const h = Math.floor(left / 60), m = left % 60;
+  return h > 0 ? `${h}h ${m}min` : `${m}min`;
+}
 let emojiGameCooldowns = {}; // { 'elosoking1': timestamp } — evitar spam del comando
 let betCooldowns = {}; // { 'canal_usuario': timestamp } — anti-spam de !apostar
 let raffleCommandHintAt = {}; // { 'canal': timestamp } — evita spamear el aviso de "este sorteo es por canje"
@@ -733,7 +746,7 @@ async function ensureTodayPokedle(channelName) {
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
     const data = await res.json();
     const cfg = data?.[0]?.pokedle_config || {};
-    const today = todayRD();
+    const today = currentRetoKey();
     if (cfg.current_day === today) return cfg; // ya está vigente
 
     const dex = await ensurePokedex();
@@ -842,11 +855,11 @@ function withDbdleLock(channelName, fn) {
   return next;
 }
 
-// Asegura el reto del día — si cambió el día (hora RD) elige un asesino nuevo sin repetir hasta agotar la lista
+// Asegura el reto vigente — si cambió la mitad del día (hora RD) elige un asesino nuevo sin repetir hasta agotar la lista
 async function ensureTodayDbdle(channelName) {
   return withDbdleLock(channelName, async () => {
     const cfg = await readDbdleConfig(channelName);
-    const today = todayRD();
+    const today = currentRetoKey();
     if (cfg.current_day === today && DBDLE_KILLERS.some(k => k.name === cfg.current_killer)) return cfg;
 
     let used = Array.isArray(cfg.used) ? cfg.used.filter(n => DBDLE_KILLERS.some(k => k.name === n)) : [];
@@ -2971,17 +2984,17 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const guessName = args.join(' ').trim();
     const cfg = await ensureTodayPokedle(channelName);
 
-    if (!cfg.current_pokemon_id) { client.say(channel, `@${username} No pude cargar el Pokédle de hoy, intenta en un momento~ 🕷️`); return; }
+    if (!cfg.current_pokemon_id) { client.say(channel, `@${username} No pude cargar el Pokédle actual, intenta en un momento~ 🕷️`); return; }
 
     // Ya resuelto hoy
     if (cfg.solved_by) {
-      client.say(channel, `🔴 El Pokédle de hoy ya lo adivinó @${cfg.solved_by} (en ${cfg.attempts} intento${cfg.attempts===1?'':'s'} entre todos) — ¡vuelve mañana! 🕷️`);
+      client.say(channel, `🔴 El Pokédle actual ya lo adivinó @${cfg.solved_by} (en ${cfg.attempts} intento${cfg.attempts===1?'':'s'} entre todos) — nuevo reto en ${nextRetoInText()} 🕷️`);
       return;
     }
 
     // Sin argumento — solo mostrar estado
     if (!guessName) {
-      client.say(channel, `🔴 ¡Hay un Pokédle activo hoy! Usa !pokedle <nombre> para intentar adivinar — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'} 🕷️`);
+      client.say(channel, `🔴 ¡Hay un Pokédle activo! Usa !pokedle <nombre> para intentar adivinar — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'} 🕷️`);
       return;
     }
 
@@ -2991,7 +3004,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (!guessMon) { client.say(channel, `@${username} No reconozco ese Pokémon (de los primeros 151) — revisa cómo lo escribiste~ 🕷️`); return; }
 
     const answer = dex.find(p => p.id === cfg.current_pokemon_id);
-    if (!answer) { client.say(channel, `@${username} Error interno con el Pokédle de hoy~ 🕷️`); return; }
+    if (!answer) { client.say(channel, `@${username} Error interno con el Pokédle actual~ 🕷️`); return; }
 
     if (guessMon.id === answer.id) {
       // Ganó — usar el lock para que solo el primero en llegar aquí quede marcado como ganador
@@ -3000,7 +3013,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
           { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
         const freshData = await freshRes.json();
         const freshCfg = freshData?.[0]?.pokedle_config || {};
-        if (freshCfg.current_day !== todayRD() || freshCfg.solved_by) return { alreadySolved: true, winner: freshCfg.solved_by, attempts: freshCfg.attempts };
+        if (freshCfg.current_day !== currentRetoKey() || freshCfg.solved_by) return { alreadySolved: true, winner: freshCfg.solved_by, attempts: freshCfg.attempts };
 
         const newAttempts = (freshCfg.attempts || 0) + 1;
         const wins = { ...(freshCfg.wins || {}) };
@@ -3027,7 +3040,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       });
 
       if (result.alreadySolved) {
-        client.say(channel, `🔴 ¡Justo a tiempo! @${result.winner} se te adelantó por un pelito — el Pokédle de hoy ya se resolvió~ 🕷️`);
+        client.say(channel, `🔴 ¡Justo a tiempo! @${result.winner} se te adelantó por un pelito — el Pokédle actual ya se resolvió~ 🕷️`);
         return;
       }
 
@@ -3056,17 +3069,17 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     const guessName = message.trim().split(/\s+/).slice(1).join(' ').trim();
     let cfg;
     try { cfg = await ensureTodayDbdle(channelName); }
-    catch (e) { console.error('[dbdle] error:', e.message); client.say(channel, `@${username} No pude cargar el DBDle de hoy, intenta en un momento~ 🕷️`); return; }
+    catch (e) { console.error('[dbdle] error:', e.message); client.say(channel, `@${username} No pude cargar el DBDle actual, intenta en un momento~ 🕷️`); return; }
 
     const answer = DBDLE_KILLERS.find(k => k.name === cfg.current_killer);
-    if (!answer) { client.say(channel, `@${username} Error interno con el DBDle de hoy~ 🕷️`); return; }
+    if (!answer) { client.say(channel, `@${username} Error interno con el DBDle actual~ 🕷️`); return; }
 
     if (cfg.solved_by) {
-      client.say(channel, `🔪 El DBDle de hoy ya lo adivinó @${cfg.solved_by} (${cfg.attempts} intento${cfg.attempts===1?'':'s'} entre todos) — ¡vuelve mañana! 🕷️`);
+      client.say(channel, `🔪 El DBDle actual ya lo adivinó @${cfg.solved_by} (${cfg.attempts} intento${cfg.attempts===1?'':'s'} entre todos) — nuevo reto en ${nextRetoInText()} 🕷️`);
       return;
     }
     if (!guessName) {
-      client.say(channel, `🔪 ¡Hay un DBDle activo hoy! Adivina el asesino con !dbdle <nombre> — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'}. 🟩 igual · 🟨 parcial · 🟥 distinto · 🔼🔽 el año es mayor/menor 🕷️`);
+      client.say(channel, `🔪 ¡Hay un DBDle activo! Adivina el asesino con !dbdle <nombre> — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'}. 🟩 igual · 🟨 parcial · 🟥 distinto · 🔼🔽 el año es mayor/menor 🕷️`);
       return;
     }
 
@@ -3078,7 +3091,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       try {
         result = await withDbdleLock(channelName, async () => {
           const fresh = await readDbdleConfig(channelName);
-          if (fresh.current_day !== todayRD() || fresh.solved_by) return { alreadySolved: true, winner: fresh.solved_by, attempts: fresh.attempts };
+          if (fresh.current_day !== currentRetoKey() || fresh.solved_by) return { alreadySolved: true, winner: fresh.solved_by, attempts: fresh.attempts };
           const newAttempts = (fresh.attempts || 0) + 1;
           const wins = { ...(fresh.wins || {}) };
           const key = username.toLowerCase();
@@ -3098,7 +3111,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
       } catch (e) { console.error('[dbdle] error al registrar ganador:', e.message); client.say(channel, `@${username} Algo falló al registrar tu acierto, avísale al streamer~ 🕷️`); return; }
 
       if (result.alreadySolved) {
-        client.say(channel, `🔪 ¡Justo a tiempo! @${result.winner} se te adelantó por un pelito — el DBDle de hoy ya se resolvió~ 🕷️`);
+        client.say(channel, `🔪 ¡Justo a tiempo! @${result.winner} se te adelantó por un pelito — el DBDle actual ya se resolvió~ 🕷️`);
         return;
       }
       const prompt = `¡El chat adivinó el DBDle del día! Era "${dbdleShortName(answer)}". Lo adivinó @${username} en ${result.attempts} intento${result.attempts===1?'':'s'} entre todos y gana ${DBDLE_POINTS} puntos. Anúncialo emocionada con tu personalidad, en máximo 2 oraciones.`;
