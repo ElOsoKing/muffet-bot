@@ -3528,6 +3528,7 @@ function setupEvents(client) {
     const tier = `Tier ${tierNum}`;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `sub ${tier} de @${username}`, username);
+    if (!isSysCmdEnabled(ch, 'alert_sub')) return; // el subatón ya sumó; solo se apaga el agradecimiento
     // Sin canAiRespond — las subs son eventos importantes y no deben perderse por el cooldown
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Gracias por suscribirte, @${username}! 🕷️♥` });
     botSay(client, channel, msg, true);
@@ -3540,6 +3541,7 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `resub de @${username}`, username);
+    if (!isSysCmdEnabled(ch, 'alert_sub')) return;
     const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Gracias por tus ${months} meses, @${username}! 🕷️♥` });
     botSay(client, channel, msg, true);
   });
@@ -3570,6 +3572,7 @@ function setupEvents(client) {
     console.log(`[gift] Regalo masivo en #${ch}: ${anon ? 'anónimo' : username} regaló ${numbOfSubs} subs Tier ${tierNum} (origin-id: ${originId || 'sin etiqueta'})`);
     // Los anónimos suman tiempo al subatón, pero no entran al ranking de contribuidores
     addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    if (!isSysCmdEnabled(ch, 'alert_gift')) return;
     const prompt = anon
       ? `Alguien anónimo acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona el número exacto (${numbOfSubs}) y agradécele su generosidad, sin mencionar ningún nombre de usuario.`
       : `@${username} acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona su nombre y el número exacto (${numbOfSubs}), y agradécele efusivamente.`;
@@ -3596,6 +3599,7 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    if (!isSysCmdEnabled(ch, 'alert_gift')) return;
     // Solo se agradece a quien regala — el receptor no se menciona
     const prompt = anon
       ? `Alguien anónimo acaba de regalar una suscripción a un viewer del chat. Agradécele su generosidad, sin mencionar ningún nombre de usuario.`
@@ -3619,6 +3623,7 @@ function setupEvents(client) {
       addSubathonTime(client, channel, ch, units * (cfg.minutes_per_bits_unit || 0), `${bits} bits de @${username}`, username);
     }
 
+    if (!isSysCmdEnabled(ch, 'alert_bits')) return; // interruptor del dashboard
     // Solo agradecer si son al menos MIN_BITS_TO_THANK bits
     if (bits < MIN_BITS_TO_THANK) return;
 
@@ -3901,6 +3906,7 @@ async function handleTwitchEvent(type, event) {
     if (!channelName || !followerName) return;
     const cfg = channelConfigs[channelName];
     if (!cfg) return;
+    if (!isSysCmdEnabled(channelName, 'alert_follow')) return; // interruptor del dashboard
     if (!followBuffer[channelName]) followBuffer[channelName] = { names: [], timer: null };
     followBuffer[channelName].names.push(followerName);
     queueFollowThanks(channelName);
