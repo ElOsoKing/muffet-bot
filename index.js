@@ -2517,7 +2517,20 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     // Guardar en Supabase
     const config = channelConfigs[channelName];
     const commands = { ...(config.commands || {}) };
-    commands[trigger] = { response, perms: ['everyone'] };
+    const existing = commands[trigger];
+    if (firstWord === '!addcmd' && existing) {
+      client.say(channel, `@${username} ${trigger} ya existe — usa !editcmd ${trigger} <nueva respuesta> para cambiarlo~ 🕷️`);
+      return;
+    }
+    if (firstWord === '!editcmd' && !existing) {
+      client.say(channel, `@${username} ${trigger} no existe todavía — créalo con !addcmd ${trigger} <respuesta>~ 🕷️`);
+      return;
+    }
+    // Al editar se conserva todo lo demás del comando (permisos, cooldown, etc.) — solo cambia la respuesta
+    const base = existing && typeof existing === 'object' ? existing : {};
+    commands[trigger] = firstWord === '!editcmd'
+      ? { ...base, response, perms: Array.isArray(base.perms) && base.perms.length ? base.perms : ['everyone'] }
+      : { response, perms: ['everyone'] };
     try {
       await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
         method: 'PATCH',
@@ -3703,6 +3716,7 @@ async function start() {
 
   // Iniciar polling de ganadores de sorteo
   setInterval(checkRaffleWinners, 10000);
+  setInterval(syncRaffleRewards, 10000);
 
   // Iniciar polling de stream en vivo (cada 60s)
   setInterval(checkStreamsLive, 60000);
@@ -3985,6 +3999,48 @@ async function checkRaffleWinners() {
       if (!ch || !raffle?.winner || raffle.active || raffle.announced || !raffle.ended_at) continue;
       if (Date.now() - new Date(raffle.ended_at).getTime() > RAFFLE_ANNOUNCE_MAX_AGE_MS) continue; // ganador viejo: ignorar
       await announceRaffleWinner(ch);
+    }
+  } catch(e) {}
+}
+
+// ── Recompensa del sorteo (modo canje): activa mientras hay sorteo abierto, pausada el resto del tiempo ──
+// Solo toca recompensas creadas por Muffet (Twitch no deja administrar las de otras apps).
+const raffleRewardPaused = {};   // { canal: true/false } — último estado aplicado en Twitch
+const raffleRewardRetryAt = {};  // { canal: timestamp } — no reintentar un fallo antes de esta hora
+
+async function setRewardPaused(channelName, twitchId, rewardId, paused) {
+  const { token } = await getFreshStreamerToken(channelName);
+  if (!token) throw new Error('sin token de Twitch');
+  const r = await fetch(`https://api.twitch.tv/helix/channel_points/custom_rewards?broadcaster_id=${twitchId}&id=${rewardId}`, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_paused: paused }),
+  });
+  if (!r.ok) throw new Error(`Twitch ${r.status}: ${(await r.text()).slice(0, 160)}`);
+}
+
+async function syncRaffleRewards() {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,twitch_id,raffle_active,raffle_settings`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    const streamers = await res.json();
+    if (!Array.isArray(streamers)) return;
+    for (const s of streamers) {
+      const ch = s.twitch_username?.toLowerCase();
+      const rs = s.raffle_settings || {};
+      if (!ch || rs.entry_mode !== 'reward' || !rs.reward_id || rs.reward_id !== rs.managed_reward_id) continue;
+      const shouldPause = !s.raffle_active?.active;
+      if (raffleRewardPaused[ch] === shouldPause) continue;
+      if (raffleRewardRetryAt[ch] && Date.now() < raffleRewardRetryAt[ch]) continue;
+      try {
+        await setRewardPaused(ch, s.twitch_id, rs.reward_id, shouldPause);
+        raffleRewardPaused[ch] = shouldPause;
+        delete raffleRewardRetryAt[ch];
+        console.log(`[raffle] Recompensa del sorteo ${shouldPause ? 'pausada' : 'activada'} en #${ch}`);
+      } catch(e) {
+        raffleRewardRetryAt[ch] = Date.now() + 2 * 60 * 1000; // reintentar en 2 min
+        console.error(`[raffle] No se pudo ${shouldPause ? 'pausar' : 'activar'} la recompensa en #${ch}:`, e.message);
+      }
     }
   } catch(e) {}
 }
