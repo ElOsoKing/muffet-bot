@@ -21,7 +21,7 @@ MuffetBot es un bot de chat de Twitch inspirado en **Muffet**, la araña tejedor
 
 Corre como **servicio multi-canal**: un solo bot atiende a decenas de streamers a la vez, cada uno con su propia configuración, personalidad y overlays, todo administrado desde un [dashboard web](https://github.com/ElOsoKing/muffet-dashboard).
 
-## ✨ Funciones principales
+## ✨ Funciones principales.
 
 | Categoría | Qué incluye |
 |---|---|
