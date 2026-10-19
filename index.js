@@ -1467,6 +1467,85 @@ function withChannelLock(channelName, fn) {
   return next;
 }
 
+// ── YouTube: escritura segura de youtube_config (compare-and-swap con campo "rev") ──
+// Cualquier cambio a la cola pasa por aquí: lee, aplica el cambio, y solo guarda si nadie más
+// modificó la config mientras tanto. Si hubo choque, reintenta con datos frescos.
+async function ytMutate(channelName, mutator, tries = 6) {
+  const H = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+  for (let i = 0; i < tries; i++) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=youtube_config&limit=1`, { headers: H });
+    const d = await r.json();
+    if (!Array.isArray(d) || !d.length) return { ok: false, error: 'nochannel' };
+    const cur = d[0].youtube_config || {};
+    const draft = JSON.parse(JSON.stringify(cur));
+    const out = (await mutator(draft)) || {};
+    if (out.abort) return { ok: false, aborted: true, ...out };
+    draft.rev = (Number(cur.rev) || 0) + 1;
+    const filter = cur.rev == null ? 'youtube_config->>rev=is.null' : `youtube_config->>rev=eq.${encodeURIComponent(cur.rev)}`;
+    const pr = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&${filter}`, {
+      method: 'PATCH',
+      headers: { ...H, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify({ youtube_config: draft })
+    });
+    const pd = await pr.json().catch(() => null);
+    if (Array.isArray(pd) && pd.length) return { ok: true, config: draft, ...out };
+    if (!pr.ok) throw new Error('supabase ' + pr.status);
+    await new Promise(res => setTimeout(res, 40 + Math.random() * 120));
+  }
+  return { ok: false, error: 'conflict' };
+}
+
+function ytExtractVideoId(text, allowBare) {
+  const s = String(text || '').trim();
+  const m = s.match(/(?:youtube\.com\/watch\?(?:[^#\s]*&)?v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/|music\.youtube\.com\/watch\?(?:[^#\s]*&)?v=)([a-zA-Z0-9_-]{11})/);
+  if (m) return m[1];
+  if (allowBare && /^[a-zA-Z0-9_-]{11}$/.test(s) && /[0-9_A-Z-]/.test(s)) return s; // ID suelto (solo para la lista negra)
+  return null;
+}
+
+function ytDurationSec(iso) {
+  const m = String(iso || '').match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (!m) return 0;
+  return (parseInt(m[1] || 0) * 3600) + (parseInt(m[2] || 0) * 60) + parseInt(m[3] || 0);
+}
+
+// Revisa un video de la API contra la config. Devuelve { ok:true, info } o { ok:false, msg }
+function ytCheckVideo(video, cfg) {
+  if (!video) return { ok: false, msg: 'No encontré ese video~ 🎵' };
+  const title = video.snippet?.title || '';
+  const channelTitle = video.snippet?.channelTitle || '';
+  const vid = video.id;
+  if (video.status?.embeddable === false) return { ok: false, msg: 'Ese video no se puede reproducir fuera de YouTube (el dueño lo bloqueó) — intenta con otro 🎵' };
+  if (video.status?.privacyStatus && !['public', 'unlisted'].includes(video.status.privacyStatus)) return { ok: false, msg: 'Ese video es privado y no se puede reproducir~ 🎵' };
+  if (video.status?.uploadStatus && video.status.uploadStatus !== 'processed') return { ok: false, msg: 'Ese video todavía no está disponible~ 🎵' };
+  const live = video.snippet?.liveBroadcastContent;
+  const sec = ytDurationSec(video.contentDetails?.duration);
+  if ((live && live !== 'none') || sec === 0) return { ok: false, msg: 'Eso es un directo o estreno, no una canción — pon un video normal 🎵' };
+  const maxMin = cfg.max_duration_min || 10;
+  if (sec > maxMin * 60) return { ok: false, msg: `Ese video dura ${Math.ceil(sec / 60)} min — el máximo es ${maxMin} min~ 🎵` };
+  const lt = title.toLowerCase(), lc = channelTitle.toLowerCase();
+  const blocked = (cfg.blacklist || []).some(b => {
+    const entry = String(b || '').trim();
+    if (!entry) return false;
+    const idInEntry = ytExtractVideoId(entry, true);
+    if (idInEntry) return idInEntry === vid;
+    const e = entry.toLowerCase();
+    return lt.includes(e) || lc.includes(e);
+  });
+  if (blocked) return { ok: false, msg: 'Esa canción está en la lista negra~ 🕷️' };
+  return { ok: true, info: { videoId: vid, title, channelTitle, durationSec: sec } };
+}
+
+function ytApiErrorMessage(data) {
+  const reason = data?.error?.errors?.[0]?.reason || data?.error?.status || '';
+  if (/quota/i.test(reason)) return 'La búsqueda de YouTube llegó a su límite de hoy — pide la canción con el link directo, o intenta mañana 🎵';
+  if (/keyInvalid|API_KEY|forbidden|accessNotConfigured/i.test(reason)) return 'YouTube no está bien configurado — avísale al streamer 🕷️';
+  return 'YouTube no respondió bien — intenta de nuevo en un momento 🎵';
+}
+
+const ytSearchCache = new Map(); // query -> { ids, ts }
+const YT_SEARCH_TTL = 30 * 60 * 1000;
+
 // Cooldown global de IA por canal — evita spam en raids y eventos masivos
 const aiGlobalCooldown = {}; // { channelName: lastResponseTime }
 const AI_GLOBAL_COOLDOWN_MS = 4000; // 4 segundos entre respuestas de IA
@@ -1771,7 +1850,6 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
 
       // Límite por usuario
       const maxPerUser = ytConfig.max_per_user || 3;
-      const chKey = channelName.replace('#','').toLowerCase();
       const userKey = username.toLowerCase();
       const ytLimits = ytConfig.song_limits || {};
       const userSongs = Array.isArray(ytLimits[userKey]) ? ytLimits[userKey] : [];
@@ -1780,11 +1858,8 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return;
       }
 
-      // Buscar en YouTube (link directo o búsqueda por nombre)
       const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
       if (!YOUTUBE_API_KEY) { client.say(channel, `@${username} YouTube no está configurado~ 🕷️`); return; }
-
-      let videoId, title, channelTitle;
 
       // Rechazar links de playlists
       if (query.includes('list=') && !query.includes('watch?v=')) {
@@ -1792,89 +1867,77 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
         return;
       }
 
-      // Detectar si es un link de YouTube
-      const ytLinkMatch = query.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
-      if (ytLinkMatch) {
-        videoId = ytLinkMatch[1];
+      // Candidatos: link directo = 1 video; búsqueda por nombre = hasta 5 resultados (con caché de 30 min)
+      let candidateIds = [];
+      const directId = ytExtractVideoId(query);
+      if (directId) {
+        candidateIds = [directId];
       } else {
-        // Búsqueda por nombre
-        const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=5&key=${YOUTUBE_API_KEY}`);
-        const searchData = await searchRes.json();
-        const items = searchData.items || [];
-        if (!items.length) { client.say(channel, `@${username} No encontré esa canción en YouTube~ 🎵`); return; }
-        videoId = items[0].id.videoId;
-      }
-
-      // Una sola llamada con toda la info que necesitamos: título, duración y si se puede reproducir embebido
-      const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${videoId}&key=${YOUTUBE_API_KEY}`);
-      const detailData = await detailRes.json();
-      const video = detailData.items?.[0];
-      if (!video) { client.say(channel, `@${username} No encontré ese video~ 🎵`); return; }
-
-      title = video.snippet.title;
-      channelTitle = video.snippet.channelTitle;
-
-      // Verificar que el video permita reproducirse embebido (fuera de YouTube) — si no, se ve como "video no disponible" en el overlay
-      if (video.status?.embeddable === false) {
-        client.say(channel, `@${username} Ese video no se puede reproducir fuera de YouTube (el dueño lo bloqueó) — intenta con otro 🎵`);
-        return;
-      }
-      if (video.status?.privacyStatus && video.status.privacyStatus !== 'public' && video.status.privacyStatus !== 'unlisted') {
-        client.say(channel, `@${username} Ese video es privado y no se puede reproducir~ 🎵`);
-        return;
-      }
-
-      // Verificar duración máxima
-      const maxDurationMin = ytConfig.max_duration_min || 10;
-      const duration = video.contentDetails?.duration || '';
-      // Parsear ISO 8601 duration (PT1H2M3S)
-      const durMatch = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-      if (durMatch) {
-        const totalMin = (parseInt(durMatch[1]||0) * 60) + parseInt(durMatch[2]||0) + (parseInt(durMatch[3]||0) > 0 ? 1 : 0);
-        if (totalMin > maxDurationMin) {
-          client.say(channel, `@${username} Ese video dura ${totalMin} min — el máximo es ${maxDurationMin} min~ 🎵`);
-          return;
+        const cacheKey = query.toLowerCase();
+        const cached = ytSearchCache.get(cacheKey);
+        if (cached && Date.now() - cached.ts < YT_SEARCH_TTL) {
+          candidateIds = cached.ids;
+        } else {
+          const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=5&key=${YOUTUBE_API_KEY}`);
+          const searchData = await searchRes.json();
+          if (searchData.error) {
+            console.error('[yt] Error de API en búsqueda:', searchData.error.message || searchData.error);
+            client.say(channel, `@${username} ${ytApiErrorMessage(searchData)}`);
+            return;
+          }
+          candidateIds = (searchData.items || []).map(i => i.id?.videoId).filter(Boolean);
+          if (candidateIds.length) {
+            ytSearchCache.set(cacheKey, { ids: candidateIds, ts: Date.now() });
+            if (ytSearchCache.size > 300) ytSearchCache.delete(ytSearchCache.keys().next().value);
+          }
         }
+        if (!candidateIds.length) { client.say(channel, `@${username} No encontré esa canción en YouTube~ 🎵`); return; }
       }
 
-      // Blacklist
-      const blacklist = ytConfig.blacklist || [];
-      const isBlocked = blacklist.some(b => title.toLowerCase().includes(b.toLowerCase()) || channelTitle.toLowerCase().includes(b.toLowerCase()));
-      if (isBlocked) { client.say(channel, `@${username} Esa canción está en la lista negra~ 🕷️`); return; }
+      // Una sola llamada para todos los candidatos: título, duración, si es directo y si se puede reproducir embebido
+      const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${candidateIds.join(',')}&key=${YOUTUBE_API_KEY}`);
+      const detailData = await detailRes.json();
+      if (detailData.error) {
+        console.error('[yt] Error de API en detalles:', detailData.error.message || detailData.error);
+        client.say(channel, `@${username} ${ytApiErrorMessage(detailData)}`);
+        return;
+      }
+      const byId = {};
+      for (const v of (detailData.items || [])) byId[v.id] = v;
 
-      // Agregar a la cola en Supabase — dentro de un lock por canal para no pisar a otro usuario que agregue al mismo tiempo
-      const addResult = await withChannelLock(channelName, async () => {
-        const freshRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-          { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-        const freshData = await freshRes.json();
-        const freshYtConfig = freshData?.[0]?.youtube_config || {};
-        const freshQueue = freshYtConfig.queue || [];
-        const freshLimits = freshYtConfig.song_limits || {};
-        const freshUserSongs = Array.isArray(freshLimits[userKey]) ? freshLimits[userKey] : [];
+      // Primer candidato (en orden de relevancia) que sí se pueda reproducir; si ninguno, explicar por qué falló el primero
+      let chosen = null, firstFail = null;
+      for (const id of candidateIds) {
+        const chk = ytCheckVideo(byId[id], ytConfig);
+        if (chk.ok) { chosen = chk.info; break; }
+        if (!firstFail) firstFail = chk.msg;
+      }
+      if (!chosen) { client.say(channel, `@${username} ${firstFail || 'No encontré esa canción~ 🎵'}`); return; }
 
-        // Re-verificar el límite con datos frescos por si cambió durante las llamadas a YouTube
-        if (freshUserSongs.length >= maxPerUser) return { ok: false, current: freshUserSongs.length };
-
-        freshQueue.push({ videoId, title, channelTitle, requestedBy: userKey, addedAt: Date.now() });
-        freshUserSongs.push({ uri: videoId, addedAt: Date.now(), durationMs: 240000 });
-        freshLimits[userKey] = freshUserSongs;
-
-        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-          method: 'PATCH',
-          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ youtube_config: { ...freshYtConfig, queue: freshQueue, song_limits: freshLimits } })
-        });
-        return { ok: true, remaining: maxPerUser - freshUserSongs.length };
+      // Agregar a la cola con escritura segura — vuelve a validar límite y duplicados con datos frescos
+      const addResult = await ytMutate(channelName, (cfg) => {
+        const queue = Array.isArray(cfg.queue) ? cfg.queue : [];
+        const limits = cfg.song_limits || {};
+        const mine = Array.isArray(limits[userKey]) ? limits[userKey] : [];
+        if (mine.length >= maxPerUser) return { abort: true, reason: 'limit', current: mine.length };
+        if (queue.some(q => q.videoId === chosen.videoId)) return { abort: true, reason: 'dup' };
+        queue.push({ videoId: chosen.videoId, title: chosen.title, channelTitle: chosen.channelTitle, requestedBy: userKey, addedAt: Date.now(), durationSec: chosen.durationSec });
+        mine.push({ uri: chosen.videoId, addedAt: Date.now(), durationMs: chosen.durationSec * 1000 });
+        limits[userKey] = mine;
+        cfg.queue = queue; cfg.song_limits = limits;
+        return { position: queue.length, remaining: maxPerUser - mine.length };
       });
 
       if (!addResult.ok) {
-        client.say(channel, `@${username} Tienes ${addResult.current}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
+        if (addResult.reason === 'limit') client.say(channel, `@${username} Tienes ${addResult.current}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
+        else if (addResult.reason === 'dup') client.say(channel, `@${username} Esa canción ya está en la cola~ 🎵`);
+        else client.say(channel, `@${username} La cola está muy movida, intenta de nuevo en un momento~ 🎵`);
         return;
       }
       const remainingMsg = addResult.remaining > 0 ? ` (puedes pedir ${addResult.remaining} más)` : ` (llegaste al límite)`;
-
-      client.say(channel, `🎵 ¡@${username} agregó "${title}"!${remainingMsg} 🎶`);
-    } catch(e) { client.say(channel, `@${username} Error al buscar en YouTube~ 🎵`); }
+      const posMsg = addResult.position <= 1 ? ' — suena enseguida' : ` — va en el puesto #${addResult.position}`;
+      client.say(channel, `🎵 ¡@${username} agregó "${chosen.title}"${posMsg}!${remainingMsg} 🎶`);
+    } catch(e) { console.error('[yt] Error en !yt:', e); client.say(channel, `@${username} Error al buscar en YouTube~ 🎵`); }
     finally { activeSongRequests.delete(ytLockKey); }
     return;
   }
@@ -3390,45 +3453,33 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   if (firstWord === '!ytnext') {
     if (!isMod(tags, channelName)) { client.say(channel, `@${username} Solo los mods pueden usar !ytnext~ 🎵`); return; }
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const ytConfig = data?.[0]?.youtube_config || {};
-      const queue = ytConfig.queue || [];
-      if (!queue.length) { client.say(channel, `🎵 No hay canciones de viewers en cola~ 🎵`); return; }
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_config: { ...ytConfig, force_next: true } })
+      const r = await ytMutate(channelName, (cfg) => {
+        const queue = cfg.queue || [];
+        if (!queue.length) return { abort: true, reason: 'empty' };
+        cfg.force_next = true;
+        return { title: queue[0].title };
       });
-      client.say(channel, `⏭️ @${username} activó la próxima canción — "${queue[0].title}" sonará ahora~ 🎵`);
+      if (r.reason === 'empty') { client.say(channel, `🎵 No hay canciones de viewers en cola~ 🎵`); return; }
+      if (!r.ok) { client.say(channel, `@${username} No pude cambiar la canción, intenta otra vez~ 🎵`); return; }
+      client.say(channel, `⏭️ @${username} activó la próxima canción — "${r.title}" sonará enseguida~ 🎵`);
     } catch(e) { client.say(channel, `@${username} Error al cambiar canción~ 🎵`); }
     return;
   }
 
+  // ── !ytskip — saltar lo que suena ahora (el overlay detiene la canción y pasa a la siguiente) ──
   if (firstWord === '!ytskip') {
     if (!isMod(tags, channelName)) { client.say(channel, `@${username} Solo los mods pueden saltar canciones~ 🎵`); return; }
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const ytConfig = data?.[0]?.youtube_config || {};
-      const queue = ytConfig.queue || [];
-      if (!queue.length) { client.say(channel, `🎵 La cola de YouTube está vacía~ 🎵`); return; }
-      const removed = queue.shift();
-      // Liberar el slot del límite del usuario que pidió la canción
-      const limits = ytConfig.song_limits || {};
-      const requester = removed.requestedBy;
-      if (requester && limits[requester]) {
-        limits[requester] = limits[requester].filter(s => s.uri !== removed.videoId);
-        if (limits[requester].length === 0) delete limits[requester];
-      }
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_config: { ...ytConfig, queue, song_limits: limits } })
+      const r = await ytMutate(channelName, (cfg) => {
+        const queue = cfg.queue || [];
+        if (!queue.length && !cfg.playlist_url) return { abort: true, reason: 'empty' };
+        cfg.player_command = 'skip';
+        cfg.player_command_ts = Date.now();
+        return { title: queue[0]?.title || null };
       });
-      client.say(channel, `⏭️ @${username} saltó "${removed.title}"~ 🎵`);
+      if (r.reason === 'empty') { client.say(channel, `🎵 No hay nada sonando ahora~ 🎵`); return; }
+      if (!r.ok) { client.say(channel, `@${username} No pude saltar, intenta otra vez~ 🎵`); return; }
+      client.say(channel, r.title ? `⏭️ @${username} saltó "${r.title}"~ 🎵` : `⏭️ @${username} saltó la canción de la playlist~ 🎵`);
     } catch(e) { client.say(channel, `@${username} Error al saltar~ 🎵`); }
     return;
   }
