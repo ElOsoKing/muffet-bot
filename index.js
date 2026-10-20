@@ -1827,7 +1827,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
     if (activeSongRequests.has(ytLockKey)) return;
     activeSongRequests.add(ytLockKey);
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=youtube_config&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const streamer = data?.[0];
@@ -3430,7 +3430,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   // ── !ytactual — ver qué suena ahora ──
   if (firstWord === '!ytactual' || firstWord === '!ytnow') {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=youtube_config&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const ytConfig = data?.[0]?.youtube_config || {};
@@ -3487,7 +3487,7 @@ const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
   // ── !ytcola ──
   if (firstWord === '!ytcola' || firstWord === '!ytqueue') {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=youtube_config&limit=1`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const queue = data?.[0]?.youtube_config?.queue || [];
@@ -4078,7 +4078,7 @@ async function setRewardPaused(channelName, twitchId, rewardId, paused) {
 
 async function syncRaffleRewards() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,twitch_id,raffle_active,raffle_settings`,
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&raffle_settings->>entry_mode=eq.reward&select=twitch_username,twitch_id,raffle_active,raffle_settings`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
     const streamers = await res.json();
     if (!Array.isArray(streamers)) return;
