@@ -89,14 +89,24 @@ const defaultConfig = (username) => ({
 // ══════════════════════════════════════════
 //  CARGAR TODOS LOS CANALES APROBADOS
 // ══════════════════════════════════════════
+const LOAD_CHANNEL_COLUMNS = ['ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
+let greetedLoadedOnce = false;
 async function loadAllChannels() {
   try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=*`,
-      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-    );
-    const streamers = await res.json();
-    if (!Array.isArray(streamers)) { console.error('Error cargando canales:', streamers); return []; }
+    // Se piden solo las columnas que el bot usa (antes select=* traía youtube_config con cola/historial, etc. cada 30s).
+    // greeted_users solo en la primera carga (después vive en memoria). Si alguna columna no existe, cae a select=*.
+    const cols = LOAD_CHANNEL_COLUMNS.concat(greetedLoadedOnce ? [] : ['greeted_users']).join(',');
+    const hdrs = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    let res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=${cols}`, { headers: hdrs });
+    let streamers = await res.json();
+    if (!Array.isArray(streamers)) {
+      console.error('Error cargando canales con columnas explícitas, usando select=*:', streamers);
+      res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=*`, { headers: hdrs });
+      streamers = await res.json();
+      if (!Array.isArray(streamers)) { console.error('Error cargando canales:', streamers); return []; }
+    } else if (!greetedLoadedOnce) {
+      greetedLoadedOnce = true;
+    }
 
     streamers.forEach(s => {
       const ch = s.twitch_username.toLowerCase();
@@ -141,6 +151,7 @@ async function loadAllChannels() {
         primerin_config:    s.primerin_config    || {},
         pokedle_config:     s.pokedle_config     || {},
         dbdle_config:       s.dbdle_config       || {},
+        emojigame_config:   s.emojigame_config   || {},
         subathon_config:    s.subathon_config    || {},
         live_announcement:  s.live_announcement  || { enabled: false },
         youtube_music_config: s.youtube_music_config || {},
