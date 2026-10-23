@@ -1215,12 +1215,8 @@ async function handleMessage(client, channel, tags, message, self) {
 
   if (!alreadyGreetedThisStream) {
     greetedMap[channelName].add(userLowerGreet);
-    // Persistir en Supabase (fire-and-forget) — sobrevive reinicios del bot
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ greeted_users: Array.from(greetedMap[channelName]) })
-    }).catch(() => {});
+    // Persistir en Supabase agrupado (debounce) — sobrevive reinicios del bot sin un PATCH por cada viewer nuevo
+    scheduleGreetedPersist(channelName);
     const isReturningViewer = (channelConfigs[channelName]?.viewer_points || {})[userLowerGreet] !== undefined;
 
     // Durante los 90s tras una raid: se marcan como saludados (arriba) pero sin mensaje individual — el saludo de raid ya los recibió a todos
@@ -1344,6 +1340,22 @@ async function handleMessage(client, channel, tags, message, self) {
 //  (Twitch eliminó /timeout y /delete de IRC en 2023 — tmi.js ya no puede moderar)
 // ══════════════════════════════════════════
 const botUserIdCache = {}; // { token: userId } — cache del ID de cada cuenta de bot
+
+// ── Persistencia agrupada de greeted_users: 1 PATCH cada ~15s como máximo por canal ──
+const greetedPersistTimers = {};
+function scheduleGreetedPersist(channelName) {
+  if (greetedPersistTimers[channelName]) return;
+  greetedPersistTimers[channelName] = setTimeout(() => {
+    delete greetedPersistTimers[channelName];
+    const set = greetedMap[channelName];
+    if (!set) return;
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ greeted_users: Array.from(set) })
+    }).catch(() => {});
+  }, 15000);
+}
 
 function getModTokenForChannel(channelName, client) {
   // Si este client es el bot personalizado del canal, usar su token; sino el del bot principal
@@ -1651,6 +1663,21 @@ const skipVotes = {}; // { channelName: Set() } — votos para saltar canción
 // El límite se libera automáticamente con setTimeout en cada canción — no necesita monitor
 const spamTracker = {}; // { channelName: { username: { msgs: [], lastMsg: '' } } }
 const slowModeTracker = {}; // { channelName: { username: lastMsgTime } }
+// Limpieza periódica de trackers por usuario (evita crecimiento sin fin en streams largos)
+setInterval(() => {
+  const now = Date.now();
+  for (const ch of Object.keys(spamTracker)) {
+    for (const u of Object.keys(spamTracker[ch])) {
+      const t = spamTracker[ch][u];
+      if (!t.msgs.length || now - t.msgs[t.msgs.length - 1] > 60000) delete spamTracker[ch][u];
+    }
+  }
+  for (const ch of Object.keys(slowModeTracker)) {
+    for (const u of Object.keys(slowModeTracker[ch])) {
+      if (now - slowModeTracker[ch][u] > 3600000) delete slowModeTracker[ch][u];
+    }
+  }
+}, 10 * 60 * 1000).unref();
 
   if (firstWord === '!cola' || firstWord === '!queue') {
     try {
@@ -4153,6 +4180,8 @@ async function checkStreamsLive() {
       } catch(e) { console.error(`[live-reset] Error de red para #${ch}:`, e.message); }
       if (channelConfigs[ch]) channelConfigs[ch].live_announcement = { ...liveConfig, last_seen_started_at: stream.started_at };
 
+      if (greetedPersistTimers[ch]) { clearTimeout(greetedPersistTimers[ch]); delete greetedPersistTimers[ch]; }
+      chatViewers[ch] = new Set();
       greetedMap[ch] = new Set([ch.toLowerCase()]); // nuevo stream — reiniciar saludos (broadcaster pre-marcado)
       // IMPORTANTE: esperar (no fire-and-forget) para minimizar la ventana donde un reinicio del bot
       // podría volver a cargar la lista vieja de Supabase antes de que se guarde la limpia.
