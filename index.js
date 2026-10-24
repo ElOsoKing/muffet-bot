@@ -91,6 +91,9 @@ const defaultConfig = (username) => ({
 // ══════════════════════════════════════════
 const LOAD_CHANNEL_COLUMNS = ['ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
 let greetedLoadedOnce = false;
+// Canales con puntos/XP sin guardar en Supabase: loadAllChannels NO debe pisar la memoria con datos viejos de la BD
+const viewerPointsDirty = {};
+const xpFlushTimers = {};
 async function loadAllChannels() {
   try {
     // Se piden solo las columnas que el bot usa (antes select=* traía youtube_config con cola/historial, etc. cada 30s).
@@ -128,6 +131,7 @@ async function loadAllChannels() {
         counters_permission: s.counters_permission || ['mod'],
         points_config:      s.points_config      || {},
         viewer_points:      (() => {
+          if (viewerPointsDirty[ch] && channelConfigs[ch]?.viewer_points) return channelConfigs[ch].viewer_points; // hay cambios sin guardar
           const vp = s.viewer_points || {};
           const levels = s.points_config?.levels || [{level:1,xp:0},{level:2,xp:100},{level:3,xp:300},{level:4,xp:600},{level:5,xp:1000}];
           // Preservar _level guardados en memoria (no sobreescribir con reload)
@@ -362,6 +366,32 @@ function cleanViewerPoints(viewerPoints) {
   return Object.fromEntries(
     Object.entries(viewerPoints || {}).filter(([k]) => !k.startsWith('_') && !INTERNAL_POINT_SUFFIXES.some(sfx => k.endsWith(sfx)))
   );
+}
+
+// ── Guardado ordenado de puntos: una sola petición a la vez por canal, siempre con el estado más reciente ──
+// (antes cada apuesta/slot/juego lanzaba su propio PATCH sin esperar: podían llegar desordenados y pisar puntos nuevos con viejos)
+const viewerPointsSaveState = {};
+function saveViewerPoints(channelName, vpObj) {
+  const st = viewerPointsSaveState[channelName] || (viewerPointsSaveState[channelName] = { busy: false, latest: null });
+  st.latest = vpObj;
+  viewerPointsDirty[channelName] = true;
+  if (st.busy) return;
+  st.busy = true;
+  (async () => {
+    while (st.latest) {
+      const obj = st.latest;
+      st.latest = null;
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ viewer_points: cleanViewerPoints(obj) })
+        });
+      } catch (e) { /* red caída: el siguiente guardado reenvía el estado completo */ }
+    }
+    st.busy = false;
+    delete viewerPointsDirty[channelName];
+  })();
 }
 
 // ══════════════════════════════════════════
@@ -2162,11 +2192,7 @@ setInterval(() => {
     viewerPointsNow[userLower] = Math.max(0, newTotal);
     channelConfigs[channelName].viewer_points = viewerPointsNow;
 
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPointsNow) })
-    }).catch(() => {});
+    saveViewerPoints(channelName, viewerPointsNow);
     return;
   }
 
@@ -2230,11 +2256,7 @@ setInterval(() => {
     viewerPoints[userLower] = Math.max(0, newTotal);
     channelConfigs[channelName].viewer_points = viewerPoints;
 
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
-    }).catch(() => {});
+    saveViewerPoints(channelName, viewerPoints);
     return;
   }
 
@@ -2328,18 +2350,13 @@ setInterval(() => {
     viewerPoints[userLower] = newXP;
     channelConfigs[channelName].viewer_points = viewerPoints;
 
-    // Flush a Supabase cada 60 segundos
-    if (!channelConfigs[channelName]._pointsFlushTimer) {
-      channelConfigs[channelName]._pointsFlushTimer = setTimeout(async () => {
-        channelConfigs[channelName]._pointsFlushTimer = null;
-        try {
-          const pointsToSave = cleanViewerPoints(channelConfigs[channelName].viewer_points);
-          await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-            method: 'PATCH',
-            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ viewer_points: pointsToSave })
-          });
-        } catch(e) {}
+    // Flush a Supabase cada 60 segundos (el XP queda marcado como "sin guardar" para que la recarga de canales no lo pise)
+    viewerPointsDirty[channelName] = true;
+    if (!xpFlushTimers[channelName]) {
+      xpFlushTimers[channelName] = setTimeout(() => {
+        delete xpFlushTimers[channelName];
+        if (channelConfigs[channelName]) saveViewerPoints(channelName, channelConfigs[channelName].viewer_points);
+        else delete viewerPointsDirty[channelName];
       }, 60000);
     }
     } // fin isBroadcasterXP
@@ -2386,11 +2403,7 @@ setInterval(() => {
     channelConfigs[channelName].viewer_points = viewerPoints;
     const emoji = config.points_config?.emoji || '🏆';
     client.say(channel, `✅ @${target} recibió ${amount} ${emoji} de @${username} 🕷️`);
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
-    }).catch(() => {});
+    saveViewerPoints(channelName, viewerPoints);
     return;
   }
 
@@ -3069,11 +3082,7 @@ setInterval(() => {
 
       viewerPointsHint[userKeyHint] = currentPoints - hintCost;
       channelConfigs[channelName].viewer_points = viewerPointsHint;
-      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPointsHint) })
-      }).catch(() => {});
+      saveViewerPoints(channelName, viewerPointsHint);
     }
 
     game.hintsUsed++;
@@ -3145,11 +3154,7 @@ setInterval(() => {
         const userKey = username.toLowerCase();
         viewerPoints[userKey] = (viewerPoints[userKey] || 0) + 100;
         channelConfigs[channelName].viewer_points = viewerPoints;
-        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-          method: 'PATCH',
-          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
-        });
+        saveViewerPoints(channelName, viewerPoints);
         return { alreadySolved: false, attempts: newAttempts };
       });
 
@@ -3215,11 +3220,7 @@ setInterval(() => {
           const viewerPoints = channelConfigs[channelName].viewer_points || {};
           viewerPoints[key] = (viewerPoints[key] || 0) + DBDLE_POINTS;
           channelConfigs[channelName].viewer_points = viewerPoints;
-          await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-            method: 'PATCH',
-            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
-          });
+          saveViewerPoints(channelName, viewerPoints);
           return { alreadySolved: false, attempts: newAttempts };
         });
       } catch (e) { console.error('[dbdle] error al registrar ganador:', e.message); client.say(channel, `@${username} Algo falló al registrar tu acierto, avísale al streamer~ 🕷️`); return; }
@@ -3318,11 +3319,7 @@ setInterval(() => {
       const winsKey = `${userKey}_emojiwins`;
       viewerPointsWin[winsKey] = (viewerPointsWin[winsKey] || 0) + 1;
 
-      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPointsWin) })
-      }).catch(() => {});
+      saveViewerPoints(channelName, viewerPointsWin);
 
       let winMsg = `🎉 ¡@${username} adivinó "${game.title}"! +${points} puntos~ 🕷️🎬`;
       if (currentStreak === 3) winMsg += ` 🔥 ¡Lleva 3 seguidas!`;
@@ -3427,11 +3424,7 @@ setInterval(() => {
     viewerPoints[loser.toLowerCase()] = Math.max(0, (viewerPoints[loser.toLowerCase()] || 0) - duel.amount);
     channelConfigs[channelName].viewer_points = viewerPoints;
 
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints) })
-    }).catch(() => {});
+    saveViewerPoints(channelName, viewerPoints);
 
     const prompt = `¡Duelo de puntos! @${duel.challengerDisplay} retó a @${username} por ${duel.amount} ${name}. ¡Ganó @${winner}! Anúncialo emocionado con tu personalidad en máximo 2 oraciones.`;
     const msg = await getMuffetResponse(channelName, prompt, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Duelo de puntos! ¡Ganó @${winner}! 🎉` });
