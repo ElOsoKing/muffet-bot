@@ -866,7 +866,11 @@ function dbdleClue(guess, answer) {
   const speed = guess.speed.join('/') + 'm/s';
   const range = guess.range.map(r => r === 'Cuerpo a cuerpo' ? 'Melee' : 'Distancia').join('+');
   const origin = guess.origin.join('/') || '—';
-  return `${dbdleShortName(guess)}: ${guess.gender} ${genderIcon} | Radio ${radius} ${dbdleListIcon(guess.radius, answer.radius)} | Vel ${speed} ${dbdleListIcon(guess.speed, answer.speed)} | ${range} ${dbdleListIcon(guess.range, answer.range)} | Altura ${guess.height} ${heightIcon} | Origen ${origin} ${dbdleListIcon(guess.origin, answer.origin)} | Año ${guess.year} ${yearIcon}`;
+  const icons = [genderIcon, dbdleListIcon(guess.radius, answer.radius), dbdleListIcon(guess.speed, answer.speed), dbdleListIcon(guess.range, answer.range), heightIcon, dbdleListIcon(guess.origin, answer.origin), yearIcon];
+  // Algunos asesinos comparten todos los datos sin ser el mismo: el cuadrito del nombre deja claro que ese NO es (🟥)
+  const sameStats = icons.every(i => i === '🟩');
+  const nameNote = sameStats ? ' — ¡mismos datos pero NO es ese!' : '';
+  return `${dbdleShortName(guess)} 🟥: ${guess.gender} ${icons[0]} | Radio ${radius} ${icons[1]} | Vel ${speed} ${icons[2]} | ${range} ${icons[3]} | Altura ${guess.height} ${icons[4]} | Origen ${origin} ${icons[5]} | Año ${guess.year} ${icons[6]}${nameNote}`;
 }
 
 async function readDbdleConfig(channelName) {
@@ -3198,7 +3202,7 @@ setInterval(() => {
       return;
     }
     if (!guessName) {
-      client.say(channel, `🔪 ¡Hay un DBDle activo! Adivina el asesino con !dbdle <nombre> — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'}. 🟩 igual · 🟨 parcial · 🟥 distinto · 🔼🔽 el año es mayor/menor 🕷️`);
+      client.say(channel, `🔪 ¡Hay un DBDle activo! Adivina el asesino con !dbdle <nombre> — llevamos ${cfg.attempts || 0} intento${(cfg.attempts||0)===1?'':'s'}. 🟩 igual · 🟨 parcial · 🟥 distinto · 🔼🔽 el año es mayor/menor · el 🟥 junto al nombre = ese no es el asesino 🕷️`);
       return;
     }
 
