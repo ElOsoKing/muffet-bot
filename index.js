@@ -420,7 +420,8 @@ function withChannelLock(lockKey, fn) {
 }
 
 async function addSubathonTime(client, channel, channelName, minutesToAdd, chatReason, contributorUsername) {
-  if (!minutesToAdd || minutesToAdd <= 0) {
+  // minutesToAdd puede ser una función(cfg) que decide los minutos con la config fresca de Supabase (la usa la raid, que es opcional)
+  if (typeof minutesToAdd !== 'function' && (!minutesToAdd || minutesToAdd <= 0)) {
     console.log(`[subathon] Evento "${chatReason}" en #${channelName} no sumó tiempo — minutos configurados: ${minutesToAdd}`);
     return;
   }
@@ -431,6 +432,10 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
       const data = await res.json();
       const cfg = data?.[0]?.subathon_config || {};
       if (!cfg.enabled) { console.log(`[subathon] "${chatReason}" en #${channelName} ignorado — subathon_config.enabled es false en Supabase`); return; }
+      if (typeof minutesToAdd === 'function') {
+        minutesToAdd = Number(minutesToAdd(cfg)) || 0;
+        if (minutesToAdd <= 0) { console.log(`[subathon] "${chatReason}" en #${channelName} no suma tiempo (desactivado o no llega al mínimo)`); return; }
+      }
 
       const maxSeconds = (cfg.max_minutes || 0) > 0 ? cfg.max_minutes * 60 : null;
       const addSeconds = minutesToAdd * 60;
@@ -3630,6 +3635,13 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Suprimir saludos individuales por 90s — que Muffet reciba a la raid en conjunto, no raider por raider
     raidSuppressGreetings[ch] = Date.now() + 90000;
+    // Subatón (opcional): la raid suma tiempo solo si está activado y trae al menos el mínimo de personas
+    const raidViewers = parseInt(viewers) || 0;
+    addSubathonTime(client, channel, ch, (cfg) => {
+      if (!cfg.raid_enabled) return 0;
+      if (raidViewers < (Number(cfg.raid_min_viewers) || 0)) return 0;
+      return Number(cfg.minutes_per_raid) || 0;
+    }, `raid de @${username} con ${raidViewers} personas`, username);
     // El saludo de raid NO usa canAiRespond — es un evento importante y no debe perderse por el cooldown
     const msg = await getMuffetResponse(ch, `¡${username} acaba de hacer raid con ${viewers} personas! Recíbelos con mucha energía.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `🕷️ ¡${username} nos hizo raid con ${viewers} personas! ¡Bienvenidos todos! 👑` });
     botSay(client, channel, msg, true);
