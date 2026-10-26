@@ -40,7 +40,16 @@ let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvid
 let emojiAutoTimers = {}; // { 'elosoking1': intervalId } — reto automático cada X minutos
 let raidSuppressGreetings = {}; // { 'elosoking1': timestamp } — suprimir saludos individuales tras una raid
 let greetedMap = {}; // { 'elosoking1': Set() }
-const greetedPersistTimers = {}; // declarado arriba: handleMessage puede correr antes de llegar a scheduleGreetedPersist (evita el error 'before initialization')
+const greetedPersistTimers = {};
+const activePolls = {}; // { canal: { question, options, votes, started } } — viven en memoria, separadas de channelConfigs
+function pollSummary(poll) { // resultados + ganador (o empate)
+  const counts = poll.options.map((o, i) => ({ name: o, count: Object.values(poll.votes).filter(v => v === i + 1).length }));
+  const top = Math.max(...counts.map(c => c.count));
+  const winners = counts.filter(c => c.count === top);
+  const line = counts.map(c => `${c.name}: ${c.count}`).join(' | ');
+  if (top <= 0) return line;
+  return `${line} — ${winners.length > 1 ? `Empate: ${winners.map(w => w.name).join(' y ')} 🤝` : `Ganó: ${winners[0].name} 🏆`}`;
+} // declarado arriba: handleMessage puede correr antes de llegar a scheduleGreetedPersist (evita el error 'before initialization')
 // Minutos por sub según tier; si el canal nunca guardó su config del subatón se usan los mismos valores que muestra el dashboard (2/4/10)
 const SUB_MIN_DEFAULTS = { 1: 2, 2: 4, 3: 10 };
 const subMinutes = (cfg, tier) => { const v = cfg?.[`minutes_per_sub_t${tier}`]; return (v === undefined || v === null) ? SUB_MIN_DEFAULTS[tier] : v; };
@@ -426,6 +435,7 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
       const maxSeconds = (cfg.max_minutes || 0) > 0 ? cfg.max_minutes * 60 : null;
       const addSeconds = minutesToAdd * 60;
       let hitCap = false;
+      let realAdded = minutesToAdd;
 
       let updated;
       if (cfg.running && cfg.target_end_time) {
@@ -433,26 +443,30 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
         const now = Date.now();
         const baseEnd = Math.max(currentEnd, now); // si ya venció, sumar desde ahora
         let newEnd = baseEnd + addSeconds * 1000;
-        if (maxSeconds && newEnd > now + maxSeconds * 1000) { newEnd = now + maxSeconds * 1000; hitCap = true; }
+        if (maxSeconds && newEnd > now + maxSeconds * 1000) { newEnd = Math.max(currentEnd, now + maxSeconds * 1000); hitCap = true; } // nunca acortar el tiempo que ya había
+        realAdded = Math.max(0, (newEnd - baseEnd) / 60000);
         updated = { ...cfg, target_end_time: new Date(newEnd).toISOString() };
       } else {
         let newRemaining = (cfg.remaining_seconds || 0) + addSeconds;
-        if (maxSeconds && newRemaining > maxSeconds) { newRemaining = maxSeconds; hitCap = true; }
+        const prevRemaining = cfg.remaining_seconds || 0;
+        if (maxSeconds && newRemaining > maxSeconds) { newRemaining = Math.max(prevRemaining, maxSeconds); hitCap = true; }
+        realAdded = Math.max(0, (newRemaining - prevRemaining) / 60);
         updated = { ...cfg, remaining_seconds: newRemaining };
       }
 
       // Ranking de contribuyentes — cuenta minutos reales sumados (respeta el límite máximo si se topó)
       if (contributorUsername) {
         const contributors = { ...(cfg.contributors || {}) };
-        contributors[contributorUsername.toLowerCase()] = (contributors[contributorUsername.toLowerCase()] || 0) + minutesToAdd;
+        contributors[contributorUsername.toLowerCase()] = (contributors[contributorUsername.toLowerCase()] || 0) + realAdded;
         updated.contributors = contributors;
       }
 
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      const saved = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
         method: 'PATCH',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ subathon_config: updated })
       });
+      if (!saved.ok) { console.error(`[subathon] no se pudo guardar +${minutesToAdd}min en #${channelName} (HTTP ${saved.status})`); return; }
       if (channelConfigs[channelName]) channelConfigs[channelName].subathon_config = updated;
       console.log(`[subathon] +${minutesToAdd}min en #${channelName} (${chatReason})`);
 
@@ -2286,7 +2300,7 @@ setInterval(() => {
     }
 
     // Buscar el premio
-    const reward = rewards.find(r => r.name.toLowerCase() === query || r.name.toLowerCase().includes(query));
+    const reward = rewards.find(r => r.name.toLowerCase() === query) || rewards.find(r => r.name.toLowerCase().includes(query)); // primero el nombre exacto
     if (!reward) { client.say(channel, `@${username} Premio no encontrado. Escribe !canjear para ver la lista~ 🕷️`); return; }
 
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
@@ -2297,24 +2311,31 @@ setInterval(() => {
       return;
     }
 
-    // Descontar puntos y guardar solicitud
+    // Descontar puntos (guardado en orden) y guardar la solicitud; si falla, se devuelven los puntos
     viewerPoints[userLower] = current - reward.cost;
     channelConfigs[channelName].viewer_points = viewerPoints;
+    saveViewerPoints(channelName, viewerPoints);
 
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
-      const data = await res.json();
-      const requests = data?.[0]?.redeem_requests || [];
-      requests.push({ id: Date.now(), username, reward: reward.name, cost: reward.cost, status: 'pending', date: new Date().toISOString() });
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ viewer_points: cleanViewerPoints(viewerPoints), redeem_requests: requests })
+      await withChannelLock(`redeem_${channelName}`, async () => { // dos canjes a la vez no deben pisarse la lista
+        const hdrs = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=redeem_requests&limit=1`, { headers: hdrs });
+        const data = await res.json();
+        if (!Array.isArray(data)) throw new Error('lectura');
+        const requests = data?.[0]?.redeem_requests || [];
+        requests.push({ id: Date.now(), username, reward: reward.name, cost: reward.cost, status: 'pending', date: new Date().toISOString() });
+        const up = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH', headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redeem_requests: requests })
+        });
+        if (!up.ok) throw new Error('guardado');
       });
       client.say(channel, `✅ @${username} canjeó "${reward.name}" por ${reward.cost} ${emoji}! El streamer revisará tu solicitud~ 🕷️`);
     } catch(e) {
-      client.say(channel, `@${username} Error al procesar el canje~ 🕷️`);
+      viewerPoints[userLower] = (viewerPoints[userLower] || 0) + reward.cost; // devolver los puntos
+      channelConfigs[channelName].viewer_points = viewerPoints;
+      saveViewerPoints(channelName, viewerPoints);
+      client.say(channel, `@${username} Error al procesar el canje, no se te cobró nada~ 🕷️`);
     }
     return;
   }
@@ -2731,34 +2752,25 @@ setInterval(() => {
     if (options.length < 2) { client.say(channel, `@${username} Necesitas al menos 2 opciones~ 🕷️`); return; }
     if (options.length > 5) { client.say(channel, `@${username} Máximo 5 opciones~ 🕷️`); return; }
 
-    // Guardar encuesta activa
-    if (!channelConfigs[channelName].activePoll) channelConfigs[channelName].activePoll = null;
-    channelConfigs[channelName].activePoll = { question, options, votes: {}, started: Date.now() };
+    // Guardar encuesta activa (aparte de channelConfigs: esa se reconstruye al recargar canales y borraría la encuesta)
+    const poll = { question, options, votes: {}, started: Date.now() };
+    activePolls[channelName] = poll;
 
     const optList = options.map((o, i) => `${i+1}. ${o}`).join(' | ');
     client.say(channel, `📊 ¡Encuesta! ${question} → ${optList} — Vota con el número 🕷️`);
 
-    // Cerrar automáticamente en 2 minutos
-    setTimeout(async () => {
-      const poll = channelConfigs[channelName].activePoll;
-      if (!poll || poll.started !== channelConfigs[channelName].activePoll?.started) return;
-      const results = poll.options.map((o, i) => {
-        const count = Object.values(poll.votes).filter(v => v === i+1).length;
-        return `${o}: ${count}`;
-      }).join(' | ');
-      const winner = poll.options.reduce((best, o, i) => {
-        const count = Object.values(poll.votes).filter(v => v === i+1).length;
-        return count > best.count ? { name: o, count } : best;
-      }, { name: '', count: -1 });
-      client.say(channel, `📊 Encuesta cerrada! ${results} ${winner.count > 0 ? `— Ganó: ${winner.name} 🏆` : ''} 🕷️`);
-      channelConfigs[channelName].activePoll = null;
+    // Cerrar automáticamente en 2 minutos (solo si ESTA encuesta sigue activa)
+    setTimeout(() => {
+      if (activePolls[channelName] !== poll) return;
+      client.say(channel, `📊 Encuesta cerrada! ${pollSummary(poll)} 🕷️`);
+      delete activePolls[channelName];
     }, 2 * 60 * 1000);
     return;
   }
 
   // Votar en encuesta activa
-  if (/^[1-5]$/.test(firstWord) && channelConfigs[channelName]?.activePoll) {
-    const poll = channelConfigs[channelName].activePoll;
+  if (/^[1-5]$/.test(firstWord) && activePolls[channelName]) {
+    const poll = activePolls[channelName];
     const vote = parseInt(firstWord);
     if (vote <= poll.options.length) {
       poll.votes[username.toLowerCase()] = vote;
@@ -2769,18 +2781,10 @@ setInterval(() => {
   // Cerrar encuesta manualmente
   if (firstWord === '!endpoll' || firstWord === '!cerrarencuesta') {
     if (!isMod(tags, channelName)) return;
-    const poll = channelConfigs[channelName]?.activePoll;
+    const poll = activePolls[channelName];
     if (!poll) { client.say(channel, `@${username} No hay encuesta activa~ 🕷️`); return; }
-    const results = poll.options.map((o, i) => {
-      const count = Object.values(poll.votes).filter(v => v === i+1).length;
-      return `${o}: ${count}`;
-    }).join(' | ');
-    const winner = poll.options.reduce((best, o, i) => {
-      const count = Object.values(poll.votes).filter(v => v === i+1).length;
-      return count > best.count ? { name: o, count } : best;
-    }, { name: '', count: -1 });
-    client.say(channel, `📊 Resultados: ${results} ${winner.count > 0 ? `— Ganó: ${winner.name} 🏆` : ''} 🕷️`);
-    channelConfigs[channelName].activePoll = null;
+    client.say(channel, `📊 Resultados: ${pollSummary(poll)} 🕷️`);
+    delete activePolls[channelName];
     return;
   }
 
@@ -2854,6 +2858,8 @@ setInterval(() => {
       if (!isMod(tags, channelName)) return;
       const prize = message.trim().split(' ').slice(2).join(' ') || 'Sorpresa';
       try {
+        const cur = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=raffle_active&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }).then(r => r.json());
+        if (cur?.[0]?.raffle_active?.active) { client.say(channel, `@${username} Ya hay un sorteo activo. Ciérralo con !sorteo end o !sorteo cancel antes de crear otro~ 🕷️`); return; }
         await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
           method: 'PATCH',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -2870,10 +2876,11 @@ setInterval(() => {
     }
     if (subCmd === 'end' || subCmd === 'fin') {
       if (!isMod(tags, channelName)) return;
-      try {
+      try { await withChannelLock(`raffle_${channelName}`, async () => {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
         const data = await res.json();
         const raffle = data?.[0]?.raffle_active || {};
+        if (!raffle.active) { client.say(channel, '⚠️ No hay un sorteo activo para terminar~ 🕷️'); return; }
         const participants = raffle.participants || [];
         if (!participants.length) { client.say(channel, '⚠️ No hay participantes en el sorteo~ 🕷️'); return; }
         const winner = participants[Math.floor(Math.random() * participants.length)];
@@ -2883,7 +2890,7 @@ setInterval(() => {
           body: JSON.stringify({ raffle_active: { active: false, prize: raffle.prize, winner, participants: [], ended_at: new Date().toISOString() } })
         });
         await announceRaffleWinner(channelName); // una sola vez, aunque también lo detecte el revisor
-      } catch(e) { client.say(channel, '⚠️ Error al terminar el sorteo'); }
+      }); } catch(e) { client.say(channel, '⚠️ Error al terminar el sorteo'); }
       return;
     }
     if (subCmd === 'cancel' || subCmd === 'cancelar') {
@@ -2912,7 +2919,7 @@ setInterval(() => {
   const raffleConfig = channelConfigs[channelName];
   const joinCmd = (raffleConfig?.raffle_settings?.join_cmd || '!entrar').toLowerCase().trim();
   if (firstWord.toLowerCase() === joinCmd) {
-    try {
+    try { await withChannelLock(`raffle_${channelName}`, async () => { // serializado: dos viewers entrando a la vez no deben pisarse la lista
       const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const raffle = data?.[0]?.raffle_active || {};
@@ -2960,16 +2967,17 @@ setInterval(() => {
       // Agregar múltiples entradas
       for (let i = 0; i < entries; i++) participants.push(username);
 
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      const saved = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
         method: 'PATCH',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ raffle_active: { ...raffle, participants } })
       });
+      if (!saved.ok) throw new Error('no se guardó la entrada');
       const uniqueCount = [...new Set(participants)].length;
       const entryMsg = entries > 1 ? ` (x${entries} entradas)` : '';
       const participantWord = uniqueCount === 1 ? 'participante' : 'participantes';
       client.say(channel, `✅ @${username} ¡Entraste al sorteo!${entryMsg} Somos ${uniqueCount} ${participantWord} 🎉🕷️`);
-    } catch(e) { client.say(channel, `@${username} Error al entrar al sorteo~ 🕷️`); }
+    }); } catch(e) { client.say(channel, `@${username} Error al entrar al sorteo~ 🕷️`); }
     return;
   }
 
@@ -3175,12 +3183,18 @@ setInterval(() => {
       client.say(channel, `🔴 ${msg}`);
     } else {
       // Aumentar contador de intentos (fire-and-forget, no crítico si se pisa alguna vez)
-      const bumpedCfg = { ...cfg, attempts: (cfg.attempts || 0) + 1 };
-      if (channelConfigs[channelName]) channelConfigs[channelName].pokedle_config = bumpedCfg;
-      fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pokedle_config: bumpedCfg })
+      // Se lee la config fresca dentro del lock: guardar la copia vieja podía borrar al ganador si alguien acertaba justo antes
+      withPokedleLock(channelName, async () => {
+        const fr = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=pokedle_config&limit=1`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }).then(r => r.json());
+        const fresh = fr?.[0]?.pokedle_config;
+        if (!fresh || fresh.solved_by || fresh.current_day !== currentRetoKey()) return;
+        const bumpedCfg = { ...fresh, attempts: (fresh.attempts || 0) + 1 };
+        if (channelConfigs[channelName]) channelConfigs[channelName].pokedle_config = bumpedCfg;
+        await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pokedle_config: bumpedCfg })
+        });
       }).catch(() => {});
       client.say(channel, `@${username} → ${pokedleClue(guessMon, answer)}`);
     }
@@ -3240,8 +3254,11 @@ setInterval(() => {
       const msg = await getMuffetResponse(channelName, prompt, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡@${username} adivinó a ${dbdleShortName(answer)} en ${result.attempts} intento${result.attempts===1?'':'s'}! 🕷️` });
       client.say(channel, `🔪 ${msg}`);
     } else {
-      const bumped = { ...cfg, attempts: (cfg.attempts || 0) + 1 };
-      saveDbdleConfig(channelName, bumped).catch(() => {});
+      withDbdleLock(channelName, async () => { // config fresca dentro del lock (ver Pokédle)
+        const fresh = await readDbdleConfig(channelName);
+        if (!fresh || fresh.solved_by || fresh.current_day !== currentRetoKey()) return;
+        await saveDbdleConfig(channelName, { ...fresh, attempts: (fresh.attempts || 0) + 1 });
+      }).catch(() => {});
       client.say(channel, `@${username} → ${dbdleClue(guessKiller, answer)}`);
     }
     return;
@@ -3417,6 +3434,15 @@ setInterval(() => {
 
     if (accepterPoints < duel.amount) {
       client.say(channel, `@${username} Necesitas ${duel.amount} ${emoji} para aceptar — tienes ${accepterPoints} 🕷️`);
+      return;
+    }
+
+    // El retador pudo gastar sus puntos (apuestas, slots, otro duelo) mientras esperaba: se vuelve a comprobar
+    const challengerPointsNow = viewerPoints[duel.challenger] || 0;
+    if (challengerPointsNow < duel.amount) {
+      clearTimeout(duel.timer);
+      delete activeDuels[channelName][userLowerAccept];
+      client.say(channel, `@${username} @${duel.challengerDisplay} ya no tiene ${duel.amount} ${emoji}, el duelo se canceló~ 🕷️`);
       return;
     }
 
