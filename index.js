@@ -40,6 +40,10 @@ let muffetSilentTimers = {}; // auto-desactivar silencio tras 6h por si se olvid
 let emojiAutoTimers = {}; // { 'elosoking1': intervalId } — reto automático cada X minutos
 let raidSuppressGreetings = {}; // { 'elosoking1': timestamp } — suprimir saludos individuales tras una raid
 let greetedMap = {}; // { 'elosoking1': Set() }
+const greetedPersistTimers = {}; // declarado arriba: handleMessage puede correr antes de llegar a scheduleGreetedPersist (evita el error 'before initialization')
+// Minutos por sub según tier; si el canal nunca guardó su config del subatón se usan los mismos valores que muestra el dashboard (2/4/10)
+const SUB_MIN_DEFAULTS = { 1: 2, 2: 4, 3: 10 };
+const subMinutes = (cfg, tier) => { const v = cfg?.[`minutes_per_sub_t${tier}`]; return (v === undefined || v === null) ? SUB_MIN_DEFAULTS[tier] : v; };
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 
 // ── Fecha del día en horario de República Dominicana (UTC-4, sin horario de verano) — usada para el Pokédle diario ──
@@ -1387,7 +1391,6 @@ async function handleMessage(client, channel, tags, message, self) {
 const botUserIdCache = {}; // { token: userId } — cache del ID de cada cuenta de bot
 
 // ── Persistencia agrupada de greeted_users: 1 PATCH cada ~15s como máximo por canal ──
-const greetedPersistTimers = {};
 function scheduleGreetedPersist(channelName) {
   if (greetedPersistTimers[channelName]) return;
   greetedPersistTimers[channelName] = setTimeout(() => {
@@ -3613,7 +3616,7 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const tier = `Tier ${tierNum}`;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `sub ${tier} de @${username}`, username);
+    addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `sub ${tier} de @${username}`, username);
     if (!isSysCmdEnabled(ch, 'alert_sub')) return; // el subatón ya sumó; solo se apaga el agradecimiento
     // Sin canAiRespond — las subs son eventos importantes y no deben perderse por el cooldown
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Gracias por suscribirte, @${username}! 🕷️♥` });
@@ -3626,7 +3629,7 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `resub de @${username}`, username);
+    addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `resub de @${username}`, username);
     if (!isSysCmdEnabled(ch, 'alert_sub')) return;
     const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Gracias por tus ${months} meses, @${username}! 🕷️♥` });
     botSay(client, channel, msg, true);
@@ -3654,7 +3657,7 @@ function setupEvents(client) {
     const anon = isAnonGifter(username);
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    const minutesEach = cfg[`minutes_per_sub_t${tierNum}`] || 0;
+    const minutesEach = subMinutes(cfg, tierNum);
     console.log(`[gift] Regalo masivo en #${ch}: ${anon ? 'anónimo' : username} regaló ${numbOfSubs} subs Tier ${tierNum} (origin-id: ${originId || 'sin etiqueta'})`);
     // Los anónimos suman tiempo al subatón, pero no entran al ranking de contribuidores
     addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
@@ -3684,7 +3687,7 @@ function setupEvents(client) {
     const anon = isAnonGifter(username);
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, cfg[`minutes_per_sub_t${tierNum}`], `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
     if (!isSysCmdEnabled(ch, 'alert_gift')) return;
     // Solo se agradece a quien regala — el receptor no se menciona
     const prompt = anon
