@@ -4042,6 +4042,40 @@ function setupEvents(client) {
 // ══════════════════════════════════════════
 let customClients = {}; // { 'canal': tmiClient }
 
+// ── Renovar los tokens de los bots conectados con el botón "Conectar mi bot" ──
+// Esos tokens se crean con la app de Muffet y caducan en unas horas; se renuevan con su refresh token.
+// Los bots con token pegado a mano (sin refresh token) no se tocan.
+async function refreshCustomBotTokens() {
+  if (!process.env.TWITCH_CLIENT_ID || !process.env.TWITCH_CLIENT_SECRET) return;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/streamers?custom_bot_refresh=not.is.null&select=twitch_username,custom_bot_username,custom_bot_refresh,custom_bot_expires_at`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    if (!r.ok) return; // si la columna aún no existe en la base de datos, simplemente no hay nada que renovar
+    const rows = await r.json();
+    for (const row of (Array.isArray(rows) ? rows : [])) {
+      const exp = row.custom_bot_expires_at ? new Date(row.custom_bot_expires_at).getTime() : 0;
+      if (exp && exp - Date.now() > 45 * 60 * 1000) continue; // aún le queda más de 45 min
+      try {
+        const tr = await fetch('https://id.twitch.tv/oauth2/token', {
+          method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: row.custom_bot_refresh, client_id: process.env.TWITCH_CLIENT_ID, client_secret: process.env.TWITCH_CLIENT_SECRET }).toString()
+        });
+        const t = await tr.json();
+        if (!t.access_token) { console.error(`[bot-token] #${row.twitch_username}: no se pudo renovar el token de ${row.custom_bot_username} (${t.message || tr.status}) — hay que reconectar el bot`); continue; }
+        const token = 'oauth:' + t.access_token;
+        const pr = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${encodeURIComponent(row.twitch_username)}`, {
+          method: 'PATCH', headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ custom_bot_token: token, custom_bot_refresh: t.refresh_token || row.custom_bot_refresh, custom_bot_expires_at: new Date(Date.now() + (t.expires_in || 3600) * 1000).toISOString() })
+        });
+        if (!pr.ok) { console.error(`[bot-token] #${row.twitch_username}: no se pudo guardar el token renovado (${pr.status})`); continue; }
+        const cfg = channelConfigs[String(row.twitch_username).toLowerCase()];
+        if (cfg) cfg.custom_bot_token = token;
+        console.log(`[bot-token] token renovado para ${row.custom_bot_username} (#${row.twitch_username})`);
+      } catch (e) { console.error('[bot-token] error:', e.message); }
+    }
+  } catch (e) { console.error('[bot-token] error general:', e.message); }
+}
+
 async function setupCustomBots() {
   for (const [ch, config] of Object.entries(channelConfigs)) {
     if (config.plan === 'pro' && config.custom_bot_username && config.custom_bot_token) {
@@ -4053,10 +4087,10 @@ async function setupCustomBots() {
       try {
         const client = new tmi.Client({
           options: { debug: false },
-          identity: { username: config.custom_bot_username, password: config.custom_bot_token },
+          identity: { username: config.custom_bot_username, password: () => (channelConfigs[ch]?.custom_bot_token || config.custom_bot_token) },
           channels: [`#${ch}`],
         });
-        installHelixSend(client, () => config.custom_bot_token, () => config.custom_bot_username);
+        installHelixSend(client, () => (channelConfigs[ch]?.custom_bot_token || config.custom_bot_token), () => (channelConfigs[ch]?.custom_bot_username || config.custom_bot_username));
         setupEvents(client);
         await client.connect();
         customClients[ch] = client;
@@ -4119,8 +4153,10 @@ async function start() {
   await mainClient.connect();
   console.log(`🐻🕷️ Conectado a ${channels.length} canales: ${channels.join(', ')}`);
 
-  // Configurar bots personalizados para usuarios Pro
+  // Configurar bots personalizados para usuarios Pro (antes, renovar los tokens que estén por vencer)
+  await refreshCustomBotTokens();
   await setupCustomBots();
+  setInterval(refreshCustomBotTokens, 15 * 60 * 1000);
 
   // Iniciar polling de ganadores de sorteo
   setInterval(checkRaffleWinners, 10000);
