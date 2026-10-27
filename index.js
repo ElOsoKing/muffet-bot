@@ -78,7 +78,7 @@ const helixAppToken = { token: null, exp: 0 };
 const helixIdCache = new Map();      // login → id de Twitch del canal
 const helixCooldown = new Map();     // canal → hasta cuándo usar IRC (tras un error de permisos)
 const helixStats = { sent: 0, fallback: 0, dropped: 0 };
-let helixSenderId = null;
+const helixSenderIds = new Map();    // token (sin 'oauth:') → id de la cuenta que habla
 
 function helixEnabledFor(ch) { return HELIX_SEND_MODE === 'all' || (HELIX_SEND_MODE === 'test' && HELIX_SEND_CHANNELS.has(ch)); }
 
@@ -95,12 +95,13 @@ async function getHelixAppToken(force = false) {
   return helixAppToken.token;
 }
 
-async function helixGetSenderId() {
-  if (helixSenderId) return helixSenderId;
-  const v = await validateTwitchToken(String(TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/i, ''));
-  if (!v?.user_id) throw Object.assign(new Error('no pude obtener el id de la cuenta del bot'), { status: 0 });
-  helixSenderId = v.user_id;
-  return helixSenderId;
+async function helixGetSenderId(rawToken) {
+  const token = String(rawToken || '').replace(/^oauth:/i, '');
+  if (helixSenderIds.has(token)) return helixSenderIds.get(token);
+  const v = await validateTwitchToken(token);
+  if (!v?.user_id) throw Object.assign(new Error('no pude obtener el id de la cuenta del bot (¿token vencido?)'), { status: 0 });
+  helixSenderIds.set(token, v.user_id);
+  return v.user_id;
 }
 
 async function helixBroadcasterId(ch) {
@@ -115,8 +116,8 @@ async function helixBroadcasterId(ch) {
 }
 
 // Devuelve { sent, reason }. Lanza error (con .status) si la API no pudo ni intentarlo.
-async function helixSend(ch, message) {
-  const sender_id = await helixGetSenderId();
+async function helixSend(ch, message, senderToken = TWITCH_OAUTH_TOKEN) {
+  const sender_id = await helixGetSenderId(senderToken);
   const broadcaster_id = await helixBroadcasterId(ch);
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getHelixAppToken(attempt > 0);
@@ -133,15 +134,17 @@ async function helixSend(ch, message) {
   }
 }
 
-function installHelixSend(client) {
+// getToken: devuelve el token IRC de la cuenta que habla con este cliente (bot principal o bot propio del canal)
+function installHelixSend(client, getToken = () => TWITCH_OAUTH_TOKEN) {
   if (HELIX_SEND_MODE === 'off') return;
+  client._helixToken = getToken;
   const ircSay = client.say.bind(client);
   client.say = async (channel, message) => {
     const ch = String(channel).replace('#', '').toLowerCase();
     // Comandos con "/" (ej. /me) y canales en pausa por error de permisos → IRC como siempre
     if (!helixEnabledFor(ch) || String(message).startsWith('/') || (helixCooldown.get(ch) || 0) > Date.now()) return ircSay(channel, message);
     try {
-      const r = await helixSend(ch, message);
+      const r = await helixSend(ch, message, getToken());
       if (r.sent) { helixStats.sent++; return [channel, message]; }
       helixStats.dropped++;
       console.log(`[helix] #${ch}: Twitch descartó un mensaje (${r.reason || 'sin motivo'}) — no se reenvía por IRC`);
@@ -2639,7 +2642,7 @@ setInterval(() => {
     if (!isMod(tags, channelName)) return;
     if (!helixEnabledFor(channelName)) { client.say(channel, `@${username} ℹ️ El envío por la API está apagado aquí (modo: ${HELIX_SEND_MODE}) 🕷️`); return; }
     try {
-      const r = await helixSend(channelName, '🧪 Prueba de envío por la API de Twitch — ¿ves la insignia de bot junto a mi nombre? 🕷️');
+      const r = await helixSend(channelName, '🧪 Prueba de envío por la API de Twitch — ¿ves la insignia de bot junto a mi nombre? 🕷️', client._helixToken ? client._helixToken() : TWITCH_OAUTH_TOKEN);
       client.say(channel, r.sent ? `@${username} ✅ La API aceptó el mensaje. Si no ves la insignia, refresca el chat (F5) 🕷️` : `@${username} ⚠️ Twitch descartó la prueba: ${r.reason || 'sin motivo'} 🕷️`);
     } catch (e) {
       const hint = (e.status === 401 || e.status === 403) ? ' — falta autorizar la app con la cuenta del bot, o que Muffet sea mod aquí' : '';
@@ -4030,6 +4033,7 @@ async function setupCustomBots() {
           identity: { username: config.custom_bot_username, password: config.custom_bot_token },
           channels: [`#${ch}`],
         });
+        installHelixSend(client, () => config.custom_bot_token);
         setupEvents(client);
         await client.connect();
         customClients[ch] = client;
