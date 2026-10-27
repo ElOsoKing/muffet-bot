@@ -1346,9 +1346,9 @@ async function handleMessage(client, channel, tags, message, self) {
 
       // ── Bloqueo de links ──
       if (modCfg.block_links) {
-        const linkRegex = /https?:\/\/|www\.|\.com|\.net|\.org|\.gg|\.tv|\.io|\.ly/i;
+        const linkRegex = /https?:\/\/|www\.|\b[a-z0-9-]+\.(com|net|org|gg|tv|io|ly)\b/i; // dominio real (con borde de palabra): ya no confunde "hola.comida" con un link
         if (linkRegex.test(message)) {
-          const whitelist = modCfg.link_whitelist || [];
+          const whitelist = (modCfg.link_whitelist || []).map(d => String(d).trim()).filter(Boolean); // una entrada vacía dejaba pasar TODOS los links
           const isWhitelisted = whitelist.some(domain => message.toLowerCase().includes(domain.toLowerCase()));
           if (!isWhitelisted && !isSub && !isVIP) {
             helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
@@ -2250,6 +2250,7 @@ setInterval(() => {
       arriesgado: { chance: 0.25, mult: 4, icon: '🔥' },
       extremo:    { chance: 0.10, mult: 9, icon: '💀' },
     };
+    if (riskArg && !tiers[riskArg]) { client.say(channel, `@${username} Riesgo no válido. Usa: facil, arriesgado o extremo — Ej: !apostar 100 arriesgado 🕷️`); return; }
     const tier = tiers[riskArg] || tiers.facil;
 
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
@@ -2430,6 +2431,7 @@ setInterval(() => {
     const amount = parseInt(parts[1]);
     const target = parts[2]?.replace('@','').toLowerCase();
     if (!amount || amount < 1 || !target) { client.say(channel, `@${username} Uso: !dar 100 @usuario 🕷️`); return; }
+    if (!/^[a-z0-9_]{3,25}$/.test(target)) { client.say(channel, `@${username} Ese no parece un usuario de Twitch válido~ 🕷️`); return; } // evita claves basura en viewer_points
     const viewerPoints = channelConfigs[channelName].viewer_points || {};
     viewerPoints[target] = Math.max(0, (viewerPoints[target] || 0) + amount);
     channelConfigs[channelName].viewer_points = viewerPoints;
