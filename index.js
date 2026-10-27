@@ -1445,6 +1445,26 @@ async function getBotUserId(token) {
   } catch(e) { return null; }
 }
 
+// ── Diagnóstico de moderación: ¿el token del bot tiene los permisos (scopes) para borrar mensajes y dar timeouts? ──
+const MOD_SCOPES_NEEDED = ['moderator:manage:chat_messages', 'moderator:manage:banned_users'];
+const botModState = {}; // { canal: true/false } — si el bot es mod ahí, según el 'userstate' que Twitch manda cuando el bot habla
+async function validateTwitchToken(token) {
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { 'Authorization': `OAuth ${token}` } });
+    if (!res.ok) return null;
+    return await res.json(); // { client_id, login, scopes, user_id, expires_in }
+  } catch(e) { return null; }
+}
+async function logModScopes() {
+  const token = (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
+  const v = await validateTwitchToken(token);
+  if (!v) { console.error('[mod] ⚠️ No se pudo validar el token del bot principal (¿vencido?) — la moderación no va a funcionar'); return; }
+  const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
+  const wrongClient = process.env.TWITCH_CLIENT_ID && v.client_id !== process.env.TWITCH_CLIENT_ID;
+  if (missing.length || wrongClient) console.error(`[mod] ⚠️ El bot principal (${v.login}) NO puede moderar:${missing.length ? ' faltan permisos ' + missing.join(', ') : ''}${wrongClient ? ' el token es de otra app (Client-Id distinto)' : ''}`);
+  else console.log(`[mod] ✅ El token del bot principal (${v.login}) tiene permisos para borrar mensajes y dar timeouts (falta que sea mod en cada canal)`);
+}
+
 async function helixDeleteMessage(client, channelName, roomId, messageId) {
   try {
     const token = getModTokenForChannel(channelName, client);
@@ -2441,6 +2461,23 @@ setInterval(() => {
     return;
   }
 
+  // ── !modcheck — (solo mods) ¿puede Muffet moderar en este canal? ──
+  if (firstWord === '!modcheck') {
+    if (!isMod(tags, channelName)) return;
+    const v = await validateTwitchToken(getModTokenForChannel(channelName, client));
+    if (!v) { client.say(channel, `@${username} 🛡️ El token del bot no es válido o venció — no puedo moderar~ 🕷️`); return; }
+    const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
+    const wrongClient = process.env.TWITCH_CLIENT_ID && v.client_id !== process.env.TWITCH_CLIENT_ID;
+    const isModHere = botModState[channelName];
+    const problems = [];
+    if (missing.length) problems.push('al token le faltan permisos de moderación');
+    if (wrongClient) problems.push('el token es de otra app de Twitch');
+    if (isModHere === false) problems.push(`${v.login} no es mod en este canal (usa /mod ${v.login})`);
+    if (problems.length) client.say(channel, `@${username} 🛡️ No puedo moderar: ${problems.join('; ')}~ 🕷️`);
+    else client.say(channel, `@${username} 🛡️ Permisos OK${isModHere === undefined ? ' — escribe !modcheck otra vez para confirmar que soy mod aquí' : ' y soy mod en este canal'}~ 🕷️`);
+    return;
+  }
+
   // ── !clip ──
   if (firstWord === '!clip') {
     if (!isSysCmdEnabled(channelName, 'clip')) return;
@@ -2657,7 +2694,7 @@ setInterval(() => {
       client.say(channel, `@${username} La respuesta es muy larga (máx 450 caracteres) — Twitch podría rechazarla~ 🕷️`);
       return;
     }
-    const RESERVED_COMMANDS = ['!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!encuesta','!endpoll','!game','!give','!juego','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
+    const RESERVED_COMMANDS = ['!modcheck','!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!encuesta','!endpoll','!game','!give','!juego','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
     if (firstWord === '!addcmd' && RESERVED_COMMANDS.includes(trigger)) {
       client.say(channel, `@${username} ${trigger} ya es un comando propio de Muffet — no se puede sobreescribir, elige otro nombre~ 🕷️`);
       return;
@@ -3626,6 +3663,10 @@ setInterval(() => {
 //  EVENTOS ESPECIALES
 // ══════════════════════════════════════════
 function setupEvents(client) {
+  // Twitch avisa si el bot es mod en cada canal cada vez que el bot habla (lo usa !modcheck)
+  client.on('userstate', (channel, state) => {
+    botModState[channel.replace('#','')] = !!(state?.mod || state?.badges?.moderator || state?.badges?.broadcaster);
+  });
   client.on('message', (channel, tags, message, self) => handleMessage(client, channel, tags, message, self));
 
   client.on('raided', async (channel, username, viewers) => {
@@ -3827,6 +3868,7 @@ async function start() {
   console.log('🐻🕷️ MuffetBot Multi-Canal iniciando...');
 
   const channels = await loadAllChannels();
+  logModScopes();
 
   if (channels.length === 0) {
     console.log('⚠️ No hay canales aprobados. Esperando...');
