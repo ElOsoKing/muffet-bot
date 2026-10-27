@@ -64,6 +64,28 @@ async function validateTwitchToken(token) {
     return await res.json(); // { client_id, login, scopes, user_id, expires_in }
   } catch(e) { return null; }
 }
+// ── Palabras prohibidas: palabra COMPLETA (acepta plural y no distingue tildes), no pedazos de otras palabras ──
+// Antes "puta" bloqueaba "computadora", "asco" bloqueaba "mascota" y "hp" bloqueaba "php".
+function normBanText(t) { // minúsculas y sin tildes (la ñ se conserva: "coño" no es "cono")
+  return String(t).toLowerCase().replace(/ñ/g, '\u0001').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\u0001/g, 'ñ');
+}
+const bannedRegexCache = new Map();
+function containsBannedWord(message, words) {
+  const text = normBanText(message);
+  for (const raw of words || []) {
+    const w = normBanText(raw).trim();
+    if (!w) continue;
+    let re = bannedRegexCache.get(w);
+    if (!re) {
+      const esc = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      re = new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?:s|es)?(?![\\p{L}\\p{N}])`, 'u');
+      if (bannedRegexCache.size > 2000) bannedRegexCache.clear();
+      bannedRegexCache.set(w, re);
+    }
+    if (re.test(text)) return true;
+  }
+  return false;
+}
 const tokenClientIdCache = {}; // { token: { id, ts } }
 async function getTokenClientId(token) { // Helix exige que el Client-Id sea el de la app que creó el token (el del bot puede venir de otra app)
   const c = tokenClientIdCache[token];
@@ -1410,7 +1432,7 @@ async function handleMessage(client, channel, tags, message, self) {
 
       // ── Palabras prohibidas ──
       if (config.banned_words?.length > 0) {
-        if (config.banned_words.some(w => msgLower.includes(w.toLowerCase()))) {
+        if (containsBannedWord(message, config.banned_words)) {
           helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
           client.say(channel, `@${username} ${warnMsg}`);
           if (modCfg.timeout_banned) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Palabra prohibida');
