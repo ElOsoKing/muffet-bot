@@ -86,6 +86,21 @@ function containsBannedWord(message, words) {
   }
   return false;
 }
+// ── Estado del bot por canal (lo lee el panel de admin) ──
+const bannedChannels = {};   // { canal: timestamp } — Twitch rechazó la entrada con msg_banned
+const lastStatusSent = {};   // { canal: { sig, ts } } — para escribir en Supabase solo cuando algo cambia
+const tokenHealthCache = {}; // { token: { state, ts } }
+let botStatusDisabled = false;
+async function tokenHealth(token) { // 'ok' | 'sin_permisos' | 'invalido' (cacheado 10 min)
+  const c = tokenHealthCache[token];
+  if (c && Date.now() - c.ts < 600000) return c.state;
+  const v = await validateTwitchToken(token);
+  let state = 'ok';
+  if (!v) state = 'invalido';
+  else if (MOD_SCOPES_NEEDED.some(sc => !(v.scopes || []).includes(sc))) state = 'sin_permisos';
+  tokenHealthCache[token] = { state, ts: Date.now() };
+  return state;
+}
 const tokenClientIdCache = {}; // { token: { id, ts } }
 async function getTokenClientId(token) { // Helix exige que el Client-Id sea el de la app que creó el token (el del bot puede venir de otra app)
   const c = tokenClientIdCache[token];
@@ -153,7 +168,7 @@ const defaultConfig = (username) => ({
 // ══════════════════════════════════════════
 //  CARGAR TODOS LOS CANALES APROBADOS
 // ══════════════════════════════════════════
-const LOAD_CHANNEL_COLUMNS = ['ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
+const LOAD_CHANNEL_COLUMNS = ['ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'feature_flags', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
 let greetedLoadedOnce = false;
 // Canales con puntos/XP sin guardar en Supabase: loadAllChannels NO debe pisar la memoria con datos viejos de la BD
 const viewerPointsDirty = {};
@@ -223,6 +238,7 @@ async function loadAllChannels() {
         subathon_config:    s.subathon_config    || {},
         live_announcement:  s.live_announcement  || { enabled: false },
         youtube_music_config: s.youtube_music_config || {},
+        feature_flags: s.feature_flags || {}, // interruptores por canal que pone el admin (ej. dbdle:false)
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
@@ -3289,6 +3305,7 @@ setInterval(() => {
   // ── !dbdle — el asesino del día de Dead by Daylight (todo el chat compite) ──
   if (firstWord === '!dbdle') {
     if (!isSysCmdEnabled(channelName, 'dbdle')) return;
+    if (channelConfigs[channelName]?.feature_flags?.dbdle === false) return; // apagado por el admin
 
     const guessName = message.trim().split(/\s+/).slice(1).join(' ').trim();
     let cfg;
@@ -3351,6 +3368,7 @@ setInterval(() => {
   // ── !dbdletop — ranking histórico de quién más días ha ganado el DBDle ──
   if (firstWord === '!dbdletop' || firstWord === '!dbdleranking') {
     if (!isSysCmdEnabled(channelName, 'dbdle')) return;
+    if (channelConfigs[channelName]?.feature_flags?.dbdle === false) return; // apagado por el admin
     const wins = Object.entries((config.dbdle_config || {}).wins || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
     if (!wins.length) { client.say(channel, `Aún nadie ha ganado el DBDle~ 🔪🕷️`); return; }
     const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
@@ -3705,6 +3723,8 @@ setInterval(() => {
 //  EVENTOS ESPECIALES
 // ══════════════════════════════════════════
 function setupEvents(client) {
+  client.on('notice', (channel, msgid) => { if (msgid === 'msg_banned') bannedChannels[String(channel).replace('#','')] = Date.now(); });
+  client.on('join', (channel, user, isSelf) => { if (isSelf) delete bannedChannels[String(channel).replace('#','')]; });
   // Twitch avisa si el bot es mod en cada canal cada vez que el bot habla (lo usa !modcheck)
   client.on('userstate', (channel, state) => {
     botModState[channel.replace('#','')] = !!(state?.mod || state?.badges?.moderator || state?.badges?.broadcaster);
@@ -4073,10 +4093,47 @@ async function start() {
     const allChannels = Object.keys(channelConfigs);
     for (const ch of allChannels) {
       if (!currentChannels.includes(ch) && !customClients[ch]) {
-        try { await mainClient.join(ch); console.log(`✅ Nuevo canal unido: ${ch}`); } catch(e) {}
+        try { await mainClient.join(ch); console.log(`✅ Nuevo canal unido: ${ch}`); } catch(e) { if (String(e).includes('msg_banned')) bannedChannels[ch] = Date.now(); }
       }
     }
   }, 30 * 1000);
+
+  // ── Estado de cada canal para el panel de admin (bot_status en Supabase) ──
+  // Solo escribe cuando algo cambia o cada 20 min, así son pocas peticiones. Si la columna no existe, se apaga sola.
+  async function reportBotStatus() {
+    if (botStatusDisabled) return;
+    try {
+      const mainToken = (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
+      const mainJoined = new Set((mainClient?.getChannels?.() || []).map(c => c.replace('#', '')));
+      const yes = (v) => v === true || v === '1' || v === 1;
+      for (const [ch, cfg] of Object.entries(channelConfigs)) {
+        const custom = customClients[ch];
+        const customJoined = custom ? (custom.getChannels?.() || []).map(c => c.replace('#', '')).includes(ch) : false;
+        const inChat = customJoined || mainJoined.has(ch);
+        const client = customJoined ? custom : mainClient;
+        const us = client?.userstate?.['#' + ch];
+        const isMod = us ? (yes(us.mod) || us['user-type'] === 'mod' || !!us.badges?.moderator || !!us.badges?.broadcaster) : null;
+        const token = await tokenHealth(customJoined && cfg.custom_bot_token ? cfg.custom_bot_token.replace(/^oauth:/, '') : mainToken);
+        const core = { in_chat: inChat, via: customJoined ? 'propio' : 'principal', banned: !inChat && !!bannedChannels[ch], mod: isMod, token };
+        const sig = JSON.stringify(core);
+        const prev = lastStatusSent[ch];
+        if (prev && prev.sig === sig && Date.now() - prev.ts < 20 * 60 * 1000) continue;
+        const last = lastChatActivity[ch];
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bot_status: { ...core, last_chat_at: last ? new Date(last).toISOString() : null, updated_at: new Date().toISOString() } })
+        });
+        if (!r.ok) {
+          if (r.status === 400 || r.status === 404) { botStatusDisabled = true; console.error('[estado] No existe la columna bot_status en Supabase — corre admin_mejoras.sql. Se desactiva el reporte de estado.'); return; }
+          continue;
+        }
+        lastStatusSent[ch] = { sig, ts: Date.now() };
+      }
+    } catch (e) { console.error('[estado] error:', e.message); }
+  }
+  setTimeout(reportBotStatus, 60 * 1000);
+  setInterval(reportBotStatus, 5 * 60 * 1000);
 }
 
 // ── Buffer de follows — agrupa follows cercanos para evitar spam (follow-bots) ──
