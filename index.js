@@ -486,6 +486,32 @@ function withChannelLock(lockKey, fn) {
   return next;
 }
 
+// Comandos propios de Muffet: no se pueden sobreescribir con !addcmd ni usar como nombre de contador
+const RESERVED_COMMANDS = ['!8ball','!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!bola8','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!dbdle','!dbdleranking','!dbdletop','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!encuesta','!endpoll','!game','!give','!juego','!level','!modcheck','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!pokedle','!pokedleranking','!pokedletop','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!subathon','!subathonranking','!subathontop','!subaton','!subatontop','!tiempo','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
+
+// ── Contadores: leer-modificar-guardar sobre datos frescos de Supabase (así no se pisan cambios hechos desde el dashboard) ──
+const counterShowCooldown = new Map();
+async function mutateCounter(channelName, fn) {
+  return withChannelLock('counters:' + channelName, async () => {
+    const hdr = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+    let counters;
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}&select=counters`, { headers: hdr });
+      const d = r.ok ? await r.json() : null;
+      counters = (Array.isArray(d) && d[0]) ? { ...(d[0].counters || {}) } : { ...(channelConfigs[channelName]?.counters || {}) };
+    } catch (e) { counters = { ...(channelConfigs[channelName]?.counters || {}) }; }
+    const result = fn(counters) || {};
+    if (result.save) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+        method: 'PATCH', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify({ counters })
+      });
+      if (!r.ok) throw new Error('No se pudo guardar el contador (HTTP ' + r.status + ')');
+      if (channelConfigs[channelName]) channelConfigs[channelName].counters = counters;
+    }
+    return result;
+  });
+}
+
 async function addSubathonTime(client, channel, channelName, minutesToAdd, chatReason, contributorUsername) {
   // minutesToAdd puede ser una función(cfg) que decide los minutos con la config fresca de Supabase (la usa la raid, que es opcional)
   if (typeof minutesToAdd !== 'function' && (!minutesToAdd || minutesToAdd <= 0)) {
@@ -2647,41 +2673,40 @@ setInterval(() => {
   }
 
   // ── Contadores ──
-  // Uso: !deaths, !deaths +1, !deaths -1, !deaths reset, !deaths 5
-  // Crear: !addcounter deaths, Borrar: !delcounter deaths
+  // Uso: !deaths · !deaths +1 · !deaths -1 · !deaths +5 · !deaths -3 · !deaths 10 (fija el valor) · !deaths reset
+  // Crear: !addcounter deaths · Borrar: !delcounter deaths
   if (firstWord === '!addcounter') {
     if (!isMod(tags, channelName)) return;
-    const name = message.trim().split(' ')[1]?.toLowerCase();
+    const name = message.trim().split(/\s+/)[1]?.toLowerCase().replace(/^!/, '');
     if (!name) { client.say(channel, `@${username} Uso: !addcounter nombre 🕷️`); return; }
-    const counters = { ...(channelConfigs[channelName].counters || {}) };
-    counters[name] = 0;
+    if (!/^[a-z0-9_]{1,20}$/.test(name)) { client.say(channel, `@${username} El nombre solo puede tener letras, números y _ (máximo 20) 🕷️`); return; }
+    if (RESERVED_COMMANDS.includes('!' + name)) { client.say(channel, `@${username} !${name} ya es un comando de Muffet, elige otro nombre~ 🕷️`); return; }
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ counters })
+      const r = await mutateCounter(channelName, (cs) => {
+        if (cs[name] !== undefined) return { exists: true, value: cs[name] };
+        if (Object.keys(cs).length >= 50) return { full: true };
+        cs[name] = 0;
+        return { created: true, save: true };
       });
-      channelConfigs[channelName].counters = counters;
-      client.say(channel, `✅ Contador !${name} creado (valor: 0) 🕷️`);
+      if (r.exists) client.say(channel, `@${username} El contador !${name} ya existe (valor: ${r.value}) 🕷️`);
+      else if (r.full) client.say(channel, `@${username} Ya tienes 50 contadores, borra alguno primero 🕷️`);
+      else client.say(channel, `✅ Contador !${name} creado (valor: 0) 🕷️`);
     } catch(e) { client.say(channel, `@${username} Error al crear contador 🕷️`); }
     return;
   }
 
   if (firstWord === '!delcounter') {
     if (!isMod(tags, channelName)) return;
-    const name = message.trim().split(' ')[1]?.toLowerCase();
+    const name = message.trim().split(/\s+/)[1]?.toLowerCase().replace(/^!/, '');
     if (!name) { client.say(channel, `@${username} Uso: !delcounter nombre 🕷️`); return; }
-    const counters = { ...(channelConfigs[channelName].counters || {}) };
-    if (counters[name] === undefined) { client.say(channel, `@${username} El contador !${name} no existe~ 🕷️`); return; }
-    delete counters[name];
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-        method: 'PATCH',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ counters })
+      const r = await mutateCounter(channelName, (cs) => {
+        if (cs[name] === undefined) return { missing: true };
+        delete cs[name];
+        return { save: true };
       });
-      channelConfigs[channelName].counters = counters;
-      client.say(channel, `🗑️ Contador !${name} eliminado 🕷️`);
+      if (r.missing) client.say(channel, `@${username} El contador !${name} no existe~ 🕷️`);
+      else client.say(channel, `🗑️ Contador !${name} eliminado 🕷️`);
     } catch(e) { client.say(channel, `@${username} Error al eliminar contador 🕷️`); }
     return;
   }
@@ -2690,47 +2715,50 @@ setInterval(() => {
   const counterName = firstWord.startsWith('!') ? firstWord.slice(1).toLowerCase() : null;
   const counters = channelConfigs[channelName]?.counters || {};
   if (counterName && counters[counterName] !== undefined) {
-    const parts = message.trim().split(' ');
-    const wantsToModify = parts.length > 1;
-    if (wantsToModify && !isMod(tags, channelName)) {
+    const arg = message.trim().split(/\s+/)[1]?.toLowerCase();
+    const CMAX = 999999999;
+    let op = null; // null = solo mostrar el valor
+    if (arg === '+1' || arg === 'add' || arg === '+') op = { type: 'add', n: 1 };
+    else if (arg === '-1' || arg === 'sub' || arg === '-') op = { type: 'add', n: -1 };
+    else if (arg === 'reset') op = { type: 'set', n: 0 };
+    else if (arg && /^[+-]\d{1,9}$/.test(arg)) op = { type: 'add', n: parseInt(arg, 10) };
+    else if (arg && /^\d{1,9}$/.test(arg)) op = { type: 'set', n: parseInt(arg, 10) };
+
+    if (op && !isMod(tags, channelName)) {
       const allowed = channelConfigs[channelName]?.counters_permission || ['mod'];
       if (!allowed.includes('everyone')) {
         const isSubUser = !!tags.subscriber || !!tags.badges?.subscriber;
         const isVIPUser = !!tags.badges?.vip;
         const canUse = (allowed.includes('sub') && isSubUser) || (allowed.includes('vip') && isVIPUser);
-        if (!canUse) return; // sin permiso — se ignora en silencio, igual que antes con mods
+        if (!canUse) return; // sin permiso — se ignora en silencio
       }
     }
-    const arg = parts[1]?.toLowerCase();
-    let value = counters[counterName];
-
-    if (!arg) {
-      // Solo mostrar el valor
-      client.say(channel, `📊 ${counterName}: ${value} 🕷️`);
-    } else if (arg === '+1' || arg === 'add' || arg === '+') {
-      value++;
-      client.say(channel, `📊 ${counterName}: ${value} (+1) 🕷️`);
-    } else if (arg === '-1' || arg === 'sub' || arg === '-') {
-      value = Math.max(0, value - 1);
-      client.say(channel, `📊 ${counterName}: ${value} (-1) 🕷️`);
-    } else if (arg === 'reset' || arg === '0') {
-      value = 0;
-      client.say(channel, `🔄 ${counterName} reiniciado a 0 🕷️`);
-    } else if (!isNaN(parseInt(arg))) {
-      value = parseInt(arg);
-      client.say(channel, `📊 ${counterName}: ${value} 🕷️`);
-    } else {
-      client.say(channel, `📊 ${counterName}: ${value} 🕷️`);
+    if (!op) {
+      // Solo consultar: los que no son mods tienen un respiro de 4 s por contador para no llenar el chat
+      if (!isMod(tags, channelName)) {
+        const key = channelName + ':' + counterName;
+        if (Date.now() - (counterShowCooldown.get(key) || 0) < 4000) return;
+        counterShowCooldown.set(key, Date.now());
+      }
+      client.say(channel, `📊 ${counterName}: ${counters[counterName]} 🕷️`);
+      return;
     }
-
-    // Guardar nuevo valor
-    const newCounters = { ...counters, [counterName]: value };
-    channelConfigs[channelName].counters = newCounters;
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ counters: newCounters })
-    }).catch(() => {});
+    try {
+      const r = await mutateCounter(channelName, (cs) => {
+        if (cs[counterName] === undefined) return { gone: true };
+        const cur = Number(cs[counterName]) || 0;
+        const next = Math.min(CMAX, Math.max(0, op.type === 'add' ? cur + op.n : op.n));
+        cs[counterName] = next;
+        return { value: next, delta: next - cur, save: true };
+      });
+      if (r.gone) return;
+      if (op.type === 'set' && op.n === 0) client.say(channel, `🔄 ${counterName} reiniciado a 0 🕷️`);
+      else if (op.type === 'add') client.say(channel, `📊 ${counterName}: ${r.value} (${r.delta >= 0 ? '+' : ''}${r.delta}) 🕷️`);
+      else client.say(channel, `📊 ${counterName}: ${r.value} 🕷️`);
+    } catch(e) {
+      console.error(`[contador] #${channelName} !${counterName}:`, e.message);
+      client.say(channel, `@${username} No pude guardar el contador, intenta de nuevo 🕷️`);
+    }
     return;
   }
 
@@ -2752,7 +2780,6 @@ setInterval(() => {
       client.say(channel, `@${username} La respuesta es muy larga (máx 450 caracteres) — Twitch podría rechazarla~ 🕷️`);
       return;
     }
-    const RESERVED_COMMANDS = ['!modcheck','!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!encuesta','!endpoll','!game','!give','!juego','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
     if (firstWord === '!addcmd' && RESERVED_COMMANDS.includes(trigger)) {
       client.say(channel, `@${username} ${trigger} ya es un comando propio de Muffet — no se puede sobreescribir, elige otro nombre~ 🕷️`);
       return;
