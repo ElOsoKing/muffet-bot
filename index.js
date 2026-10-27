@@ -82,6 +82,28 @@ const helixSenderIds = new Map();    // token (sin 'oauth:') → id de la cuenta
 
 function helixEnabledFor(ch) { return HELIX_SEND_MODE === 'all' || (HELIX_SEND_MODE === 'test' && HELIX_SEND_CHANNELS.has(ch)); }
 
+// Bots propios que ya autorizaron la app de Muffet (los registra el servidor al terminar el botón "Autorizar para la insignia").
+// Con HELIX_SEND distinto de off, esos bots envían por la API solos: no hace falta añadir su canal a HELIX_SEND_CHANNELS.
+const helixAuthorizedBots = new Set();
+async function refreshHelixAuthorized() {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=like.bot_auth:*&select=key,value`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+    if (!r.ok) return; // si falla, se conserva la lista anterior
+    const rows = await r.json();
+    const next = new Set();
+    for (const row of rows || []) {
+      const sc = row?.value?.scopes || [];
+      if (sc.includes('user:bot') && sc.includes('user:write:chat')) next.add(String(row.key).replace(/^bot_auth:/, '').toLowerCase());
+    }
+    helixAuthorizedBots.clear(); next.forEach(x => helixAuthorizedBots.add(x));
+  } catch (e) { /* se reintenta en 2 min */ }
+}
+function helixEnabledForClient(client, ch) {
+  if (helixEnabledFor(ch)) return true;
+  const login = client?._helixLogin ? String(client._helixLogin() || '').toLowerCase() : '';
+  return !!login && helixAuthorizedBots.has(login);
+}
+
 async function getHelixAppToken(force = false) {
   if (!force && helixAppToken.token && Date.now() < helixAppToken.exp - 60000) return helixAppToken.token;
   const r = await fetch('https://id.twitch.tv/oauth2/token', {
@@ -135,14 +157,15 @@ async function helixSend(ch, message, senderToken = TWITCH_OAUTH_TOKEN) {
 }
 
 // getToken: devuelve el token IRC de la cuenta que habla con este cliente (bot principal o bot propio del canal)
-function installHelixSend(client, getToken = () => TWITCH_OAUTH_TOKEN) {
+function installHelixSend(client, getToken = () => TWITCH_OAUTH_TOKEN, getLogin = null) {
   if (HELIX_SEND_MODE === 'off') return;
   client._helixToken = getToken;
+  client._helixLogin = getLogin;
   const ircSay = client.say.bind(client);
   client.say = async (channel, message) => {
     const ch = String(channel).replace('#', '').toLowerCase();
     // Comandos con "/" (ej. /me) y canales en pausa por error de permisos → IRC como siempre
-    if (!helixEnabledFor(ch) || String(message).startsWith('/') || (helixCooldown.get(ch) || 0) > Date.now()) return ircSay(channel, message);
+    if (!helixEnabledForClient(client, ch) || String(message).startsWith('/') || (helixCooldown.get(ch) || 0) > Date.now()) return ircSay(channel, message);
     try {
       const r = await helixSend(ch, message, getToken());
       if (r.sent) { helixStats.sent++; return [channel, message]; }
@@ -151,8 +174,8 @@ function installHelixSend(client, getToken = () => TWITCH_OAUTH_TOKEN) {
       return [channel, message];
     } catch (e) {
       helixStats.fallback++;
-      if (e.status === 401 || e.status === 403) {
-        helixCooldown.set(ch, Date.now() + 10 * 60 * 1000); // permisos: no insistir por 10 min
+      if (e.status === 401 || e.status === 403 || e.status === 0) {
+        helixCooldown.set(ch, Date.now() + 10 * 60 * 1000); // permisos o token inválido: no insistir por 10 min
         console.error(`[helix] #${ch}: la API rechazó el envío (${e.status}: ${e.message}) — uso IRC 10 min. ¿Falta autorizar la app (/auth/twitch/bot) o que Muffet sea mod / el streamer dé channel:bot?`);
       } else console.error(`[helix] #${ch}: error al enviar por la API (${e.message}) — salió por IRC`);
       return ircSay(channel, message);
@@ -2640,7 +2663,7 @@ setInterval(() => {
   // ── !modcheck — (solo mods) ¿puede Muffet moderar en este canal? Hace pruebas reales que no dañan a nadie ──
   if (firstWord === '!helixcheck') {
     if (!isMod(tags, channelName)) return;
-    if (!helixEnabledFor(channelName)) { client.say(channel, `@${username} ℹ️ El envío por la API está apagado aquí (modo: ${HELIX_SEND_MODE}) 🕷️`); return; }
+    if (!helixEnabledForClient(client, channelName)) { client.say(channel, `@${username} ℹ️ El envío por la API está apagado aquí (modo: ${HELIX_SEND_MODE}) 🕷️`); return; }
     try {
       const r = await helixSend(channelName, '🧪 Prueba de envío por la API de Twitch — ¿ves la insignia de bot junto a mi nombre? 🕷️', client._helixToken ? client._helixToken() : TWITCH_OAUTH_TOKEN);
       client.say(channel, r.sent ? `@${username} ✅ La API aceptó el mensaje. Si no ves la insignia, refresca el chat (F5) 🕷️` : `@${username} ⚠️ Twitch descartó la prueba: ${r.reason || 'sin motivo'} 🕷️`);
@@ -4033,7 +4056,7 @@ async function setupCustomBots() {
           identity: { username: config.custom_bot_username, password: config.custom_bot_token },
           channels: [`#${ch}`],
         });
-        installHelixSend(client, () => config.custom_bot_token);
+        installHelixSend(client, () => config.custom_bot_token, () => config.custom_bot_username);
         setupEvents(client);
         await client.connect();
         customClients[ch] = client;
@@ -4284,6 +4307,7 @@ async function start() {
   }
   setTimeout(reportBotStatus, 60 * 1000);
   setInterval(reportBotStatus, 5 * 60 * 1000);
+  if (HELIX_SEND_MODE !== 'off') { refreshHelixAuthorized(); setInterval(refreshHelixAuthorized, 2 * 60 * 1000); }
 }
 
 // ── Buffer de follows — agrupa follows cercanos para evitar spam (follow-bots) ──
