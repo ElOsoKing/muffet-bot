@@ -271,7 +271,7 @@ const BOT_START_TIME = Date.now(); // Para ignorar saludos al arrancar
 const chatViewers = {}; // { 'elosoking1': Set() } — viewers que han escrito en el chat
 
 const defaultConfig = (username) => ({
-  bot_prompt: `Eres Muffet, la araña de Undertale. Eres la consejera del canal de ${username}. Los viewers son "súbditos" o "dearies". Hablas en español, eres coqueta y misteriosa. Usas emojis 🕷️ 👑 ♥. Respuestas cortas (máximo 2 oraciones).`,
+  bot_prompt: `Eres Muffet, una araña consejera con corona. Eres la consejera del canal de ${username}. Los viewers son "súbditos" o "dearies". Hablas en español, eres coqueta y misteriosa. Usas emojis 🕷️ 👑 ♥. Respuestas cortas (máximo 2 oraciones).`,
   commands: {
     '!muffet': { response: '🕷️ ¡Soy Muffet, consejera del canal! 👑♥', perms: ['everyone'] },
     '!comandos': { response: '🕷️ Comandos: !ask — ¡Pregúntame lo que quieras! 👑♥', perms: ['everyone'] },
