@@ -2470,21 +2470,31 @@ setInterval(() => {
     return;
   }
 
-  // ── !modcheck — (solo mods) ¿puede Muffet moderar en este canal? ──
+  // ── !modcheck — (solo mods) ¿puede Muffet moderar en este canal? Hace pruebas reales que no dañan a nadie ──
   if (firstWord === '!modcheck') {
     if (!isMod(tags, channelName)) return;
-    const v = await validateTwitchToken(getModTokenForChannel(channelName, client));
+    const token = getModTokenForChannel(channelName, client);
+    const v = await validateTwitchToken(token);
     if (!v) { client.say(channel, `@${username} 🛡️ El token del bot no es válido o venció — no puedo moderar~ 🕷️`); return; }
-    const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
-    // tmi.js guarda las etiquetas del bot en cada canal en client.userstate (se llenan cuando el bot habla); el evento 'userstate' es respaldo
-    const us = client.userstate && client.userstate[channel];
-    const yes = (v) => v === true || v === '1' || v === 1;
-    const isModHere = us ? (yes(us.mod) || us['user-type'] === 'mod' || !!us.badges?.moderator || !!us.badges?.broadcaster) : botModState[channelName];
-    const problems = [];
-    if (missing.length) problems.push('al token le faltan permisos de moderación');
-    if (isModHere === false) problems.push(`${v.login} no es mod en este canal (usa /mod ${v.login})`);
-    if (problems.length) client.say(channel, `@${username} 🛡️ No puedo moderar: ${problems.join('; ')}~ 🕷️`);
-    else client.say(channel, `@${username} 🛡️ Permisos OK${isModHere === undefined ? ' — pero no pude confirmar si soy mod aquí (prueba un link con el bloqueo activado)' : ' y soy mod en este canal'}~ 🕷️`);
+    const modId = await getBotUserId(token);
+    const cid = await getTokenClientId(token);
+    const roomId = tags['room-id'];
+    const hdr = { 'Authorization': `Bearer ${token}`, 'Client-Id': cid, 'Content-Type': 'application/json' };
+    // Prueba segura: Twitch revisa PRIMERO si el bot es mod y tiene permiso; después revisa los datos.
+    // Timeout al dueño del canal y borrar un mensaje que no existe siempre se rechazan con 400/404 — si llega ese error, el permiso está bien.
+    const verdict = (status) => status === 400 || status === 404 || status === 422 ? '✅' : status === 401 || status === 403 ? '❌' : '❓';
+    let tStat = 0, dStat = 0;
+    try {
+      const r1 = await fetch(`https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${roomId}&moderator_id=${modId}`, { method: 'POST', headers: hdr, body: JSON.stringify({ data: { user_id: roomId, duration: 1, reason: 'prueba de permisos' } }) });
+      tStat = r1.status;
+    } catch(e) {}
+    try {
+      const r2 = await fetch(`https://api.twitch.tv/helix/moderation/chat?broadcaster_id=${roomId}&moderator_id=${modId}&message_id=00000000-0000-0000-0000-000000000000`, { method: 'DELETE', headers: hdr });
+      dStat = r2.status;
+    } catch(e) {}
+    const bothOk = verdict(tStat) === '✅' && verdict(dStat) === '✅';
+    const hint = bothOk ? '' : (tStat === 403 || dStat === 403 ? ` — no soy mod en este canal o me faltan permisos (usa /mod ${v.login})` : tStat === 401 || dStat === 401 ? ' — el token no es aceptado por Twitch' : '');
+    client.say(channel, `@${username} 🛡️ Timeouts ${verdict(tStat)} | Borrar mensajes ${verdict(dStat)}${hint}${bothOk ? ' — puedo moderar aquí' : ''} (códigos ${tStat}/${dStat}) 🕷️`);
     return;
   }
 
