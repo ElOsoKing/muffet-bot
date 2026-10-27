@@ -64,13 +64,21 @@ async function validateTwitchToken(token) {
     return await res.json(); // { client_id, login, scopes, user_id, expires_in }
   } catch(e) { return null; }
 }
+const tokenClientIdCache = {}; // { token: { id, ts } }
+async function getTokenClientId(token) { // Helix exige que el Client-Id sea el de la app que creó el token (el del bot puede venir de otra app)
+  const c = tokenClientIdCache[token];
+  if (c && Date.now() - c.ts < 3600000) return c.id;
+  const v = await validateTwitchToken(token);
+  const id = v?.client_id || process.env.TWITCH_CLIENT_ID;
+  tokenClientIdCache[token] = { id, ts: Date.now() };
+  return id;
+}
 async function logModScopes() {
   const token = (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
   const v = await validateTwitchToken(token);
   if (!v) { console.error('[mod] ⚠️ No se pudo validar el token del bot principal (¿vencido?) — la moderación no va a funcionar'); return; }
   const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
-  const wrongClient = process.env.TWITCH_CLIENT_ID && v.client_id !== process.env.TWITCH_CLIENT_ID;
-  if (missing.length || wrongClient) console.error(`[mod] ⚠️ El bot principal (${v.login}) NO puede moderar:${missing.length ? ' faltan permisos ' + missing.join(', ') : ''}${wrongClient ? ' el token es de otra app (Client-Id distinto)' : ''}`);
+  if (missing.length) console.error(`[mod] ⚠️ El bot principal (${v.login}) NO puede moderar: faltan permisos ${missing.join(', ')}`);
   else console.log(`[mod] ✅ El token del bot principal (${v.login}) tiene permisos para borrar mensajes y dar timeouts (falta que sea mod en cada canal)`);
 }
 
@@ -1457,7 +1465,7 @@ async function getBotUserId(token) {
   if (botUserIdCache[token]) return botUserIdCache[token];
   try {
     const res = await fetch('https://api.twitch.tv/helix/users', {
-      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': await getTokenClientId(token) }
     });
     const data = await res.json();
     const id = data.data?.[0]?.id;
@@ -1473,7 +1481,7 @@ async function helixDeleteMessage(client, channelName, roomId, messageId) {
     if (!modId || !roomId || !messageId) return false;
     const res = await fetch(`https://api.twitch.tv/helix/moderation/chat?broadcaster_id=${roomId}&moderator_id=${modId}&message_id=${messageId}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID }
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': await getTokenClientId(token) }
     });
     if (res.status === 401 || res.status === 403) console.error(`[mod] Sin permisos para borrar en #${channelName} — el bot debe ser MOD y su token necesita el scope moderator:manage:chat_messages (status ${res.status})`);
     return res.ok;
@@ -1487,7 +1495,7 @@ async function helixTimeout(client, channelName, roomId, targetUserId, durationS
     if (!modId || !roomId || !targetUserId) return false;
     const res = await fetch(`https://api.twitch.tv/helix/moderation/bans?broadcaster_id=${roomId}&moderator_id=${modId}`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': await getTokenClientId(token), 'Content-Type': 'application/json' },
       body: JSON.stringify({ data: { user_id: targetUserId, duration: durationSec, reason: (reason || '').slice(0, 100) } })
     });
     if (res.status === 401 || res.status === 403) console.error(`[mod] Sin permisos para timeout en #${channelName} — el bot debe ser MOD y su token necesita el scope moderator:manage:banned_users (status ${res.status})`);
@@ -2468,11 +2476,9 @@ setInterval(() => {
     const v = await validateTwitchToken(getModTokenForChannel(channelName, client));
     if (!v) { client.say(channel, `@${username} 🛡️ El token del bot no es válido o venció — no puedo moderar~ 🕷️`); return; }
     const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
-    const wrongClient = process.env.TWITCH_CLIENT_ID && v.client_id !== process.env.TWITCH_CLIENT_ID;
     const isModHere = botModState[channelName];
     const problems = [];
     if (missing.length) problems.push('al token le faltan permisos de moderación');
-    if (wrongClient) problems.push('el token es de otra app de Twitch');
     if (isModHere === false) problems.push(`${v.login} no es mod en este canal (usa /mod ${v.login})`);
     if (problems.length) client.say(channel, `@${username} 🛡️ No puedo moderar: ${problems.join('; ')}~ 🕷️`);
     else client.say(channel, `@${username} 🛡️ Permisos OK${isModHere === undefined ? ' — escribe !modcheck otra vez para confirmar que soy mod aquí' : ' y soy mod en este canal'}~ 🕷️`);
