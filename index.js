@@ -53,6 +53,27 @@ function pollSummary(poll) { // resultados + ganador (o empate)
 // Minutos por sub según tier; si el canal nunca guardó su config del subatón se usan los mismos valores que muestra el dashboard (2/4/10)
 const SUB_MIN_DEFAULTS = { 1: 2, 2: 4, 3: 10 };
 const subMinutes = (cfg, tier) => { const v = cfg?.[`minutes_per_sub_t${tier}`]; return (v === undefined || v === null) ? SUB_MIN_DEFAULTS[tier] : v; };
+
+// ── Diagnóstico de moderación: ¿el token del bot tiene los permisos (scopes) para borrar mensajes y dar timeouts? ──
+const MOD_SCOPES_NEEDED = ['moderator:manage:chat_messages', 'moderator:manage:banned_users'];
+const botModState = {}; // { canal: true/false } — si el bot es mod ahí, según el 'userstate' que Twitch manda cuando el bot habla
+async function validateTwitchToken(token) {
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { 'Authorization': `OAuth ${token}` } });
+    if (!res.ok) return null;
+    return await res.json(); // { client_id, login, scopes, user_id, expires_in }
+  } catch(e) { return null; }
+}
+async function logModScopes() {
+  const token = (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
+  const v = await validateTwitchToken(token);
+  if (!v) { console.error('[mod] ⚠️ No se pudo validar el token del bot principal (¿vencido?) — la moderación no va a funcionar'); return; }
+  const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
+  const wrongClient = process.env.TWITCH_CLIENT_ID && v.client_id !== process.env.TWITCH_CLIENT_ID;
+  if (missing.length || wrongClient) console.error(`[mod] ⚠️ El bot principal (${v.login}) NO puede moderar:${missing.length ? ' faltan permisos ' + missing.join(', ') : ''}${wrongClient ? ' el token es de otra app (Client-Id distinto)' : ''}`);
+  else console.log(`[mod] ✅ El token del bot principal (${v.login}) tiene permisos para borrar mensajes y dar timeouts (falta que sea mod en cada canal)`);
+}
+
 let activeEmojiGames = {}; // { 'elosoking1': { emojis, title, startedAt, hintsUsed } }
 
 // ── Fecha del día en horario de República Dominicana (UTC-4, sin horario de verano) — usada para el Pokédle diario ──
@@ -1443,26 +1464,6 @@ async function getBotUserId(token) {
     if (id) botUserIdCache[token] = id;
     return id || null;
   } catch(e) { return null; }
-}
-
-// ── Diagnóstico de moderación: ¿el token del bot tiene los permisos (scopes) para borrar mensajes y dar timeouts? ──
-const MOD_SCOPES_NEEDED = ['moderator:manage:chat_messages', 'moderator:manage:banned_users'];
-const botModState = {}; // { canal: true/false } — si el bot es mod ahí, según el 'userstate' que Twitch manda cuando el bot habla
-async function validateTwitchToken(token) {
-  try {
-    const res = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { 'Authorization': `OAuth ${token}` } });
-    if (!res.ok) return null;
-    return await res.json(); // { client_id, login, scopes, user_id, expires_in }
-  } catch(e) { return null; }
-}
-async function logModScopes() {
-  const token = (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
-  const v = await validateTwitchToken(token);
-  if (!v) { console.error('[mod] ⚠️ No se pudo validar el token del bot principal (¿vencido?) — la moderación no va a funcionar'); return; }
-  const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
-  const wrongClient = process.env.TWITCH_CLIENT_ID && v.client_id !== process.env.TWITCH_CLIENT_ID;
-  if (missing.length || wrongClient) console.error(`[mod] ⚠️ El bot principal (${v.login}) NO puede moderar:${missing.length ? ' faltan permisos ' + missing.join(', ') : ''}${wrongClient ? ' el token es de otra app (Client-Id distinto)' : ''}`);
-  else console.log(`[mod] ✅ El token del bot principal (${v.login}) tiene permisos para borrar mensajes y dar timeouts (falta que sea mod en cada canal)`);
 }
 
 async function helixDeleteMessage(client, channelName, roomId, messageId) {
