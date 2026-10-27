@@ -64,6 +64,99 @@ async function validateTwitchToken(token) {
     return await res.json(); // { client_id, login, scopes, user_id, expires_in }
   } catch(e) { return null; }
 }
+
+// ══════════════════════════════════════════
+//  ENVÍO POR LA API DE TWITCH (insignia de bot)
+//  Con HELIX_SEND=off (por defecto) todo sigue saliendo por IRC, igual que siempre.
+//  HELIX_SEND=test + HELIX_SEND_CHANNELS=canal1,canal2 → solo esos canales envían por la API.
+//  HELIX_SEND=all → todos los canales del bot principal.
+//  Si la API falla por cualquier motivo, el mensaje sale por IRC: nunca se pierde una respuesta.
+// ══════════════════════════════════════════
+const HELIX_SEND_MODE = (process.env.HELIX_SEND || 'off').toLowerCase();
+const HELIX_SEND_CHANNELS = new Set((process.env.HELIX_SEND_CHANNELS || '').toLowerCase().split(',').map(x => x.trim().replace(/^#/, '')).filter(Boolean));
+const helixAppToken = { token: null, exp: 0 };
+const helixIdCache = new Map();      // login → id de Twitch del canal
+const helixCooldown = new Map();     // canal → hasta cuándo usar IRC (tras un error de permisos)
+const helixStats = { sent: 0, fallback: 0, dropped: 0 };
+let helixSenderId = null;
+
+function helixEnabledFor(ch) { return HELIX_SEND_MODE === 'all' || (HELIX_SEND_MODE === 'test' && HELIX_SEND_CHANNELS.has(ch)); }
+
+async function getHelixAppToken(force = false) {
+  if (!force && helixAppToken.token && Date.now() < helixAppToken.exp - 60000) return helixAppToken.token;
+  const r = await fetch('https://id.twitch.tv/oauth2/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: process.env.TWITCH_CLIENT_ID || '', client_secret: process.env.TWITCH_CLIENT_SECRET || '', grant_type: 'client_credentials' }).toString()
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.access_token) throw Object.assign(new Error('token de app: ' + (d.message || r.status)), { status: r.status });
+  helixAppToken.token = d.access_token;
+  helixAppToken.exp = Date.now() + (d.expires_in || 3600) * 1000;
+  return helixAppToken.token;
+}
+
+async function helixGetSenderId() {
+  if (helixSenderId) return helixSenderId;
+  const v = await validateTwitchToken(String(TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/i, ''));
+  if (!v?.user_id) throw Object.assign(new Error('no pude obtener el id de la cuenta del bot'), { status: 0 });
+  helixSenderId = v.user_id;
+  return helixSenderId;
+}
+
+async function helixBroadcasterId(ch) {
+  if (helixIdCache.has(ch)) return helixIdCache.get(ch);
+  const token = await getHelixAppToken();
+  const r = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(ch)}`, { headers: { Authorization: `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '' } });
+  const d = await r.json().catch(() => ({}));
+  const id = d?.data?.[0]?.id;
+  if (!id) throw Object.assign(new Error(`no encontré el id de #${ch}`), { status: r.status });
+  helixIdCache.set(ch, id);
+  return id;
+}
+
+// Devuelve { sent, reason }. Lanza error (con .status) si la API no pudo ni intentarlo.
+async function helixSend(ch, message) {
+  const sender_id = await helixGetSenderId();
+  const broadcaster_id = await helixBroadcasterId(ch);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await getHelixAppToken(attempt > 0);
+    const r = await fetch('https://api.twitch.tv/helix/chat/messages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Client-Id': process.env.TWITCH_CLIENT_ID || '', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broadcaster_id, sender_id, message: String(message).slice(0, 500) })
+    });
+    if (r.status === 401 && attempt === 0) continue; // token de app vencido: pedir uno nuevo y reintentar una vez
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(d.message || ('HTTP ' + r.status)), { status: r.status });
+    const item = d.data?.[0];
+    return { sent: !!item?.is_sent, reason: item?.drop_reason ? `${item.drop_reason.code}: ${item.drop_reason.message}` : null };
+  }
+}
+
+function installHelixSend(client) {
+  if (HELIX_SEND_MODE === 'off') return;
+  const ircSay = client.say.bind(client);
+  client.say = async (channel, message) => {
+    const ch = String(channel).replace('#', '').toLowerCase();
+    // Comandos con "/" (ej. /me) y canales en pausa por error de permisos → IRC como siempre
+    if (!helixEnabledFor(ch) || String(message).startsWith('/') || (helixCooldown.get(ch) || 0) > Date.now()) return ircSay(channel, message);
+    try {
+      const r = await helixSend(ch, message);
+      if (r.sent) { helixStats.sent++; return [channel, message]; }
+      helixStats.dropped++;
+      console.log(`[helix] #${ch}: Twitch descartó un mensaje (${r.reason || 'sin motivo'}) — no se reenvía por IRC`);
+      return [channel, message];
+    } catch (e) {
+      helixStats.fallback++;
+      if (e.status === 401 || e.status === 403) {
+        helixCooldown.set(ch, Date.now() + 10 * 60 * 1000); // permisos: no insistir por 10 min
+        console.error(`[helix] #${ch}: la API rechazó el envío (${e.status}: ${e.message}) — uso IRC 10 min. ¿Falta autorizar la app (/auth/twitch/bot) o que Muffet sea mod / el streamer dé channel:bot?`);
+      } else console.error(`[helix] #${ch}: error al enviar por la API (${e.message}) — salió por IRC`);
+      return ircSay(channel, message);
+    }
+  };
+}
+
 // ── Palabras prohibidas: palabra COMPLETA (acepta plural y no distingue tildes), no pedazos de otras palabras ──
 // Antes "puta" bloqueaba "computadora", "asco" bloqueaba "mascota" y "hp" bloqueaba "php".
 function normBanText(t) { // minúsculas y sin tildes (la ñ se conserva: "coño" no es "cono")
@@ -487,7 +580,7 @@ function withChannelLock(lockKey, fn) {
 }
 
 // Comandos propios de Muffet: no se pueden sobreescribir con !addcmd ni usar como nombre de contador
-const RESERVED_COMMANDS = ['!8ball','!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!bola8','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!dbdle','!dbdleranking','!dbdletop','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!encuesta','!endpoll','!game','!give','!juego','!level','!modcheck','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!pokedle','!pokedleranking','!pokedletop','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!subathon','!subathonranking','!subathontop','!subaton','!subatontop','!tiempo','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
+const RESERVED_COMMANDS = ['!8ball','!accept','!aceptar','!addcmd','!addcounter','!apostar','!ask','!bet','!bola8','!cancion','!canción','!canjear','!cerrarencuesta','!clip','!cmds','!cola','!comandos','!dado','!dar','!dbdle','!dbdleranking','!dbdletop','!decline','!delcmd','!delcounter','!donaciones','!donar','!duel','!duelo','!editcmd','!emoji','!emojigame','!emojihint','!emojiranking','!emojiskip','!emojitop','!helixcheck','!encuesta','!endpoll','!game','!give','!juego','!level','!modcheck','!muffethabla','!muffetoff','!muffeton','!muffetsilencio','!muffetsilent','!muffetspeak','!muffetstatus','!nivel','!paypal','!pokedle','!pokedleranking','!pokedletop','!poll','!pregunta','!puntos','!queue','!random','!ranking','!rechazar','!redeem','!redes','!ruleta','!skip','!slots','!song','!sorteo','!sr','!subathon','!subathonranking','!subathontop','!subaton','!subatontop','!tiempo','!tip','!title','!titulo','!top','!toprimerin','!tragaperras','!uptime','!vskip','!xp','!youtube','!yt','!ytactual','!ytcola','!ytnext','!ytnow','!ytqueue','!ytskip'];
 
 // ── Contadores: leer-modificar-guardar sobre datos frescos de Supabase (así no se pisan cambios hechos desde el dashboard) ──
 const counterShowCooldown = new Map();
@@ -2542,6 +2635,19 @@ setInterval(() => {
   }
 
   // ── !modcheck — (solo mods) ¿puede Muffet moderar en este canal? Hace pruebas reales que no dañan a nadie ──
+  if (firstWord === '!helixcheck') {
+    if (!isMod(tags, channelName)) return;
+    if (!helixEnabledFor(channelName)) { client.say(channel, `@${username} ℹ️ El envío por la API está apagado aquí (modo: ${HELIX_SEND_MODE}) 🕷️`); return; }
+    try {
+      const r = await helixSend(channelName, '🧪 Prueba de envío por la API de Twitch — ¿ves la insignia de bot junto a mi nombre? 🕷️');
+      client.say(channel, r.sent ? `@${username} ✅ La API aceptó el mensaje. Si no ves la insignia, refresca el chat (F5) 🕷️` : `@${username} ⚠️ Twitch descartó la prueba: ${r.reason || 'sin motivo'} 🕷️`);
+    } catch (e) {
+      const hint = (e.status === 401 || e.status === 403) ? ' — falta autorizar la app con la cuenta del bot, o que Muffet sea mod aquí' : '';
+      client.say(channel, `@${username} ❌ La API falló (${e.status || 'red'}: ${String(e.message).slice(0, 120)})${hint}. Los mensajes siguen saliendo por IRC 🕷️`);
+    }
+    return;
+  }
+
   if (firstWord === '!modcheck') {
     if (!isMod(tags, channelName)) return;
     const token = getModTokenForChannel(channelName, client);
@@ -3979,6 +4085,8 @@ async function start() {
   if (!channels.includes(mainChannel)) channels.push(mainChannel);
 
   mainClient = createMainClient(channels);
+  installHelixSend(mainClient);
+  console.log(`[helix] envío por la API de Twitch: ${HELIX_SEND_MODE}${HELIX_SEND_MODE === 'test' ? ' (' + ([...HELIX_SEND_CHANNELS].join(', ') || 'ningún canal') + ')' : ''}`);
   setupEvents(mainClient);
 
   await mainClient.connect();
