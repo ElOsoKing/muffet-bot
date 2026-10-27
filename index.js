@@ -512,6 +512,13 @@ async function mutateCounter(channelName, fn) {
   });
 }
 
+// 4 → "4 min", 4.5 → "4.5 min", 0.5 → "30 s" (las raids pueden sumar fracciones de minuto)
+function fmtMinutes(m) {
+  if (m < 1) return `${Math.max(1, Math.round(m * 60))} s`;
+  const r = Math.round(m * 10) / 10;
+  return `${r} min`;
+}
+
 async function addSubathonTime(client, channel, channelName, minutesToAdd, chatReason, contributorUsername) {
   // minutesToAdd puede ser una función(cfg) que decide los minutos con la config fresca de Supabase (la usa la raid, que es opcional)
   if (typeof minutesToAdd !== 'function' && (!minutesToAdd || minutesToAdd <= 0)) {
@@ -571,7 +578,7 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
       // Avisar en el chat — se puede desactivar con announce:false en la config
       if (cfg.announce !== false && client && channel) {
         const capNote = hitCap ? ' (llegó al límite máximo)' : '';
-        client.say(channel, `⏱️ +${minutesToAdd} min al subatón — ${chatReason}${capNote} 🕷️`);
+        client.say(channel, `⏱️ +${fmtMinutes(realAdded > 0 ? realAdded : minutesToAdd)} al subatón — ${chatReason}${capNote} 🕷️`);
       }
     } catch(e) { console.error('[subathon] error:', e.message); }
   });
@@ -3764,10 +3771,14 @@ function setupEvents(client) {
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Suprimir saludos individuales por 90s — que Muffet reciba a la raid en conjunto, no raider por raider
     raidSuppressGreetings[ch] = Date.now() + 90000;
-    // Subatón (opcional): la raid suma tiempo solo si está activado y trae al menos el mínimo de personas
+    // Subatón (opcional): la raid suma X segundos por cada persona que trae (seconds_per_raid_viewer).
+    // Si el canal aún tiene la config vieja (minutos fijos + mínimo de personas), se respeta hasta que la cambie.
     const raidViewers = parseInt(viewers) || 0;
     addSubathonTime(client, channel, ch, (cfg) => {
       if (!cfg.raid_enabled) return 0;
+      if (cfg.seconds_per_raid_viewer !== undefined && cfg.seconds_per_raid_viewer !== null) {
+        return Math.round(raidViewers * (Number(cfg.seconds_per_raid_viewer) || 0)) / 60;
+      }
       if (raidViewers < (Number(cfg.raid_min_viewers) || 0)) return 0;
       return Number(cfg.minutes_per_raid) || 0;
     }, `raid de @${username} con ${raidViewers} personas`, username);
