@@ -2476,12 +2476,15 @@ setInterval(() => {
     const v = await validateTwitchToken(getModTokenForChannel(channelName, client));
     if (!v) { client.say(channel, `@${username} 🛡️ El token del bot no es válido o venció — no puedo moderar~ 🕷️`); return; }
     const missing = MOD_SCOPES_NEEDED.filter(sc => !(v.scopes || []).includes(sc));
-    const isModHere = botModState[channelName];
+    // tmi.js guarda las etiquetas del bot en cada canal en client.userstate (se llenan cuando el bot habla); el evento 'userstate' es respaldo
+    const us = client.userstate && client.userstate[channel];
+    const yes = (v) => v === true || v === '1' || v === 1;
+    const isModHere = us ? (yes(us.mod) || us['user-type'] === 'mod' || !!us.badges?.moderator || !!us.badges?.broadcaster) : botModState[channelName];
     const problems = [];
     if (missing.length) problems.push('al token le faltan permisos de moderación');
     if (isModHere === false) problems.push(`${v.login} no es mod en este canal (usa /mod ${v.login})`);
     if (problems.length) client.say(channel, `@${username} 🛡️ No puedo moderar: ${problems.join('; ')}~ 🕷️`);
-    else client.say(channel, `@${username} 🛡️ Permisos OK${isModHere === undefined ? ' — escribe !modcheck otra vez para confirmar que soy mod aquí' : ' y soy mod en este canal'}~ 🕷️`);
+    else client.say(channel, `@${username} 🛡️ Permisos OK${isModHere === undefined ? ' — pero no pude confirmar si soy mod aquí (prueba un link con el bloqueo activado)' : ' y soy mod en este canal'}~ 🕷️`);
     return;
   }
 
