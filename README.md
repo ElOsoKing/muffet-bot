@@ -1,77 +1,91 @@
 <div align="center">
 
-# 🕷️ MuffetBot
+# 🕷️ SilklyBot
 
-**Un chatbot de Twitch multi-canal con personalidad propia, IA conversacional, minijuegos, gambling, subatones y más.**
+**Un chatbot de Twitch multi-canal con personalidad propia (Muffet, la araña consejera), IA conversacional, minijuegos, apuestas, subatones y más.**
 
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![tmi.js](https://img.shields.io/badge/tmi.js-1.8-9147FF?logo=twitch&logoColor=white)](https://github.com/tmijs/tmi.js)
 [![Supabase](https://img.shields.io/badge/Database-Supabase-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com)
 [![License](https://img.shields.io/badge/License-Todos_los_derechos_reservados-red.svg)](LICENSE)
 
-[Panel de control](https://muffet-dashboard.onrender.com) · [Repo del Dashboard](https://github.com/ElOsoKing/muffet-dashboard) · [Reportar un bug](../../issues)
+[Panel de control](https://silklybot.com) · [Repo del Dashboard](https://github.com/ElOsoKing/muffet-dashboard) · [Reportar un bug](../../issues)
 
 </div>
 
 ---
 
-## 🎬 ¿Qué es MuffetBot?
+## 🎬 ¿Qué es SilklyBot?
 
-MuffetBot es un bot de chat de Twitch inspirado en **Muffet**, la araña tejedora de repostería de *Undertale*. No es solo un bot de comandos genéricos: tiene personalidad propia (configurable por cada streamer), conversa usando IA, y trae un ecosistema completo de funciones pensadas para hacer crecer el chat — desde minijuegos y sistemas de apuestas hasta subatones con contador en pantalla.
+SilklyBot es un bot de chat para Twitch con personalidad propia: **Muffet**, una araña consejera con corona y mucho carácter. No es solo un bot de comandos genéricos: su personalidad es configurable por cada streamer, conversa con IA y trae un ecosistema completo pensado para hacer crecer el chat, desde minijuegos y apuestas hasta subatones con contador en pantalla.
 
-Corre como **servicio multi-canal**: un solo bot atiende a decenas de streamers a la vez, cada uno con su propia configuración, personalidad y overlays, todo administrado desde un [dashboard web](https://github.com/ElOsoKing/muffet-dashboard).
+Corre como **servicio multi-canal**: un solo bot atiende a muchos streamers a la vez, cada uno con su propia configuración, personalidad y overlays, todo administrado desde el [dashboard web](https://github.com/ElOsoKing/muffet-dashboard).
 
-## ✨ Funciones principales.
+> Proyecto independiente y hecho por un fan. No está afiliado ni respaldado por Twitch.
+
+## ✨ Funciones principales
 
 | Categoría | Qué incluye |
 |---|---|
-| 🤖 **IA conversacional** | Personalidad 100% personalizable por canal, responde menciones y modera el chat con IA |
+| 🤖 **IA conversacional** | Personalidad personalizable por canal, responde menciones y modera con IA |
 | 🎬 **Emoji Game** | Adivina películas, series y videojuegos a partir de emojis generados por IA, con pistas, racha y ranking |
-| 🎰 **Puntos y gambling** | `!apostar` con niveles de riesgo, `!slots`, `!duelo` (con aceptar/rechazar), sistema de niveles y XP |
-| ⏱️ **Subatón** | Contador en pantalla que suma tiempo con cada sub, gift sub y bits — con ranking de contribuidores |
-| 🔊 **Alertas multimedia** | Los canjes de puntos del canal disparan audio o video (memes) directo en el stream |
-| 🥇 **Primerin** | Sistema de "quién llega primero" al stream, por comando o por canje de puntos de Twitch |
-| 🎵 **Música** | Cola de canciones vía Spotify o YouTube con límites configurables por usuario |
-| 🛡️ **Moderación** | Filtros de palabras, links, spam y moderación asistida por IA (vía Helix API) |
-| 🎉 **Eventos de Twitch** | Agradece subs, resubs, regalos de subs y bits automáticamente, con personalidad |
-| 📢 **Sorteos, encuestas, shoutouts** | Todo configurable y automatizable desde el dashboard |
+| 🎰 **Puntos y apuestas** | `!apostar` con niveles de riesgo, `!slots`, `!duelo` (con aceptar/rechazar), niveles y XP |
+| ⏱️ **Subatón** | Contador en pantalla que suma tiempo con subs, gift subs y bits, con ranking de contribuidores |
+| 🔊 **Alertas multimedia** | Los canjes de puntos disparan audio o video directo en el stream |
+| 🥇 **Primerin** | "Quién llega primero" al stream, por comando o por canje de puntos |
+| 🎵 **Música** | Cola de canciones vía Spotify o YouTube con límites por usuario |
+| 🛡️ **Moderación** | Filtros de palabras, links, spam y moderación asistida por IA |
+| 🏅 **Insignia de bot** | Los mensajes salen con la insignia oficial de bot de Twitch (Helix Send Chat Message) |
+| 🤝 **Bot propio** | Cada streamer puede conectar su propio bot, con nombre e identidad propios |
+| 🎉 **Eventos de Twitch** | Agradece subs, resubs, regalos y bits automáticamente |
+| 📢 **Sorteos, encuestas, shoutouts** | Configurables desde el dashboard |
 
-Son más de **45 comandos** distintos, todos activables/desactivables por canal desde el panel de control.
+Más de **45 comandos**, todos activables o desactivables por canal desde el panel.
 
 ## 🧠 Cómo funciona
 
 ```
-Twitch Chat (IRC)  ──tmi.js──▶  MuffetBot (Node.js)  ──▶  Supabase (config + datos)
-                                       │
-                                       ├──▶ Groq / Claude (respuestas de IA)
-                                       ├──▶ Twitch Helix API (moderación, clips, categoría)
-                                       ├──▶ Spotify / YouTube API (música)
-                                       └──▶ EventSub (canjes, follows) ◀── Dashboard (Express + Render)
+Twitch Chat ──tmi.js (IRC)──▶  SilklyBot (Node.js)  ──▶  Supabase (config + datos)
+Twitch Helix (envío con insignia) ◀──┤
+                                     ├──▶ Groq / Claude (respuestas de IA)
+                                     ├──▶ Twitch Helix API (moderación, clips, categoría)
+                                     ├──▶ Spotify / YouTube API (música)
+                                     └──▶ EventSub (canjes, follows) ◀── Dashboard (Express + Render)
 ```
 
-- El bot mantiene **una conexión IRC por canal**, incluyendo soporte para que cada streamer use su propio bot personalizado con nombre e identidad propios.
-- Toda la configuración vive en **Supabase** (Postgres) y se sincroniza cada 30 segundos.
-- Los eventos de canje de puntos y follows llegan vía **EventSub** al servidor del dashboard, que se los reenvía al bot.
-- Las respuestas de IA usan **Groq** (rápido, para chat general) y **Claude** (para tareas más creativas como el Emoji Game).
+- Mantiene **una conexión de chat por canal**, con soporte para bots personalizados.
+- Los mensajes se envían por la API de Twitch (insignia de bot) y, si falla, por IRC como respaldo temporal.
+- La configuración vive en **Supabase** (Postgres) y se sincroniza cada 30 segundos.
+- Los tokens de bots personalizados creados con "Conectar mi bot" se **renuevan solos**.
+- Canjes de puntos y follows llegan por **EventSub** al servidor del dashboard, que los reenvía al bot.
+- La IA usa **Groq** (chat general) y **Claude** (tareas creativas como el Emoji Game).
 
 ## 🛠️ Stack técnico
 
 - **Runtime:** Node.js 18+
-- **Chat:** [tmi.js](https://github.com/tmijs/tmi.js) (cliente IRC de Twitch)
+- **Chat:** [tmi.js](https://github.com/tmijs/tmi.js) + Twitch Helix
 - **Base de datos:** [Supabase](https://supabase.com) (Postgres + Storage)
-- **IA:** [Groq](https://groq.com) (`openai/gpt-oss-20b`) y [Claude](https://www.anthropic.com/claude) (Haiku)
+- **IA:** [Groq](https://groq.com) y [Claude](https://www.anthropic.com/claude)
 - **APIs externas:** Twitch Helix, Spotify Web API, YouTube Data API v3
 - **Hosting:** [Railway](https://railway.app)
 
+## 🧭 Hoja de ruta
+
+- [x] Insignia de bot en todos los canales
+- [x] Conectar bot propio con un clic y renovación automática de tokens
+- [x] Dominio propio: silklybot.com
+- [ ] Nuevo logo y mascota original
+- [ ] Soporte multiplataforma (Kick, YouTube), con el núcleo separado de cada plataforma
+
 ## 🚀 Este bot es un servicio, no un self-host
 
-MuffetBot corre como servicio multi-canal — no está pensado para clonar y correr tu propia instancia. Si quieres usarlo en tu canal, regístrate directamente en el **[dashboard](https://muffet-dashboard.onrender.com)**.
+SilklyBot corre como servicio multi-canal y no está pensado para clonar y correr tu propia instancia. Si lo quieres en tu canal, regístrate en el **[dashboard](https://silklybot.com)**.
 
-Este repositorio es público para que otros desarrolladores puedan ver cómo está construido, aprender, o contribuir con ideas.
+Este repositorio es público para que otros desarrolladores puedan ver cómo está construido, aprender o aportar ideas.
 
 ## 📄 Licencia
 
-Este código se comparte públicamente por transparencia — no está bajo una licencia de código abierto. **Todos los derechos reservados.** Ver [LICENSE](LICENSE) para más detalles.
+Este código se comparte públicamente por transparencia y no está bajo una licencia de código abierto. **Todos los derechos reservados.** Ver [LICENSE](LICENSE).
 
 ---
 
