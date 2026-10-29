@@ -1382,246 +1382,6 @@ function createMainClient(channels) {
 }
 
 // ══════════════════════════════════════════
-//  HANDLER DE MENSAJES
-// ══════════════════════════════════════════
-function isMod(tags, channelName) {
-  return tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channelName.toLowerCase();
-}
-
-async function handleMessage(client, channel, tags, message, self) {
-  if (self) return;
-  if (isKnownBot(tags, tags.username || '')) return;
-
-  const channelName = channel.replace('#', '').toLowerCase();
-
-  // Solo responder en canales registrados en MuffetBot
-  if (!channelConfigs[channelName]) return;
-
-  // Si el canal tiene bot personalizado, solo ESE bot debe procesar los mensajes — el mainClient se hace a un lado
-  // (mismo patrón que ya usamos para raids/subs/bits — evita respuestas y comandos duplicados)
-  if (customClients[channelName] && customClients[channelName] !== client) return;
-
-  // ── Chat compartido (Shared Chat) — ignorar mensajes que no son del propio canal ──
-  // Twitch envía 'source-room-id' cuando el mensaje viene de OTRO canal participante
-  // del shared chat. Si no coincide con el room-id de este canal, el mensaje no es
-  // realmente de aquí y no debe disparar comandos, saludos ni respuestas de IA.
-  if (tags['source-room-id'] && tags['room-id'] && tags['source-room-id'] !== tags['room-id']) {
-    return;
-  }
-
-  const config = channelConfigs[channelName];
-  const username = tags['display-name'] || tags.username;
-  const msgLower = message.trim().toLowerCase();
-  const firstWord = msgLower.split(' ')[0];
-  const botName = TWITCH_BOT_USERNAME.toLowerCase();
-
-  // Ignorar al bot
-  if (username.toLowerCase() === botName) return;
-
-  // Registrar viewer activo para {randomuser}
-  if (!chatViewers[channelName]) chatViewers[channelName] = new Set();
-  chatViewers[channelName].add(username.toLowerCase());
-
-  // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
-  // NOTA: El canje real se procesa vía EventSub en server.js (handleRewardRedemption).
-  // Este bloque solo queda como respaldo si llega vía chat tags (no garantizado).
-
-  // ── Comandos de control (solo mods) ──
-  if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
-    if (!isMod(tags, channelName)) return;
-    muffetSilentMap[channelName] = true;
-    // Auto-desactivar después de 6 horas por si se olvidan (ej. chat compartido que termina)
-    if (muffetSilentTimers[channelName]) clearTimeout(muffetSilentTimers[channelName]);
-    muffetSilentTimers[channelName] = setTimeout(() => {
-      muffetSilentMap[channelName] = false;
-    }, 6 * 60 * 60 * 1000);
-    client.say(channel, '🤫 Modo silencio activado — no responderé a raids, subs, regalos, bits ni mensajes automáticos. Ideal para chats compartidos~ 🕷️');
-    return;
-  }
-
-  if (firstWord === '!muffethabla' || firstWord === '!muffetspeak') {
-    if (!isMod(tags, channelName)) return;
-    muffetSilentMap[channelName] = false;
-    if (muffetSilentTimers[channelName]) { clearTimeout(muffetSilentTimers[channelName]); delete muffetSilentTimers[channelName]; }
-    client.say(channel, '🗣️ ¡Estoy de vuelta, dearies! Ya puedo hablar libremente~ 🕷️👑♥');
-    return;
-  }
-
-  if (firstWord === '!muffeton') {
-    if (!isMod(tags, channelName)) return;
-    muffetActiveMap[channelName] = true;
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on_off_ai: true })
-    }).catch(() => {});
-    let onMsg;
-    const streamerName = channelName.replace('#','');
-    onMsg = await getMuffetResponse(channelName, 
-      `Acabas de activarte en el chat de ${streamerName}. Saluda al chat con energía usando tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
-      username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥' });
-    client.say(channel, onMsg);
-    return;
-  }
-  if (firstWord === '!muffetoff') {
-    if (!isMod(tags, channelName)) return;
-    muffetActiveMap[channelName] = false;
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on_off_ai: false })
-    }).catch(() => {});
-    let offMsg;
-    const streamerNameOff = channelName.replace('#','');
-    offMsg = await getMuffetResponse(channelName, 
-      `Te vas a descansar del chat de ${streamerNameOff}. Despídete del chat con tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
-      username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥' });
-    client.say(channel, offMsg);
-    return;
-  }
-  if (firstWord === '!muffetstatus') {
-    const active = muffetActiveMap[channelName] !== false;
-    const silent = muffetSilentMap[channelName] === true;
-    let statusMsg;
-    if (!active) {
-      statusMsg = `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`;
-    } else if (silent) {
-      statusMsg = `🤫 Activa pero en modo silencio (no responde raids/subs/regalos/bits) — usa !muffethabla para que vuelva a hablar~ 🕷️`;
-    } else {
-      statusMsg = `🟢 La guardiana está activa y hablando con todos~ 🕷️♥`;
-    }
-    client.say(channel, statusMsg);
-    return;
-  }
-
-  // ── Saludo al chatear por primera vez en el stream actual ──
-  // greetedMap se reinicia cada vez que el canal empieza un nuevo stream (ver checkStreamsLive),
-  // así cada viewer recibe un saludo una vez por stream, no una vez para siempre.
-  if (!greetedMap[channelName]) greetedMap[channelName] = new Set();
-  const userLowerGreet = username.toLowerCase();
-  const alreadyGreetedThisStream = greetedMap[channelName].has(userLowerGreet);
-
-  if (!alreadyGreetedThisStream) {
-    greetedMap[channelName].add(userLowerGreet);
-    // Persistir en Supabase agrupado (debounce) — sobrevive reinicios del bot sin un PATCH por cada viewer nuevo
-    scheduleGreetedPersist(channelName);
-    const isReturningViewer = (channelConfigs[channelName]?.viewer_points || {})[userLowerGreet] !== undefined;
-
-    // Durante los 90s tras una raid: se marcan como saludados (arriba) pero sin mensaje individual — el saludo de raid ya los recibió a todos
-    const raidSuppressed = Date.now() < (raidSuppressGreetings[channelName] || 0);
-
-    if (!raidSuppressed && muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
-      const isViewbot = /https?:\/\//i.test(message) ||
-        /buy\s*(followers|viewers|views|subs)/i.test(message) ||
-        /get\s*(views|viewers|followers)/i.test(message) ||
-        /increase.*viewers/i.test(message) ||
-        /cheap.*follow/i.test(message) ||
-        /t\.me\//i.test(message) ||
-        /bit\.ly\//i.test(message);
-      const isCommand = message.trim().startsWith('!');
-      const isBroadcaster = (tags.username || '').toLowerCase() === channelName.toLowerCase() ||
-                            tags.badges?.broadcaster === '1';
-
-      if (!isViewbot && !isCommand && !isBroadcaster) {
-        setTimeout(async () => {
-          try {
-            if (!canAiRespond(channelName)) return;
-            const welcomeMsg = await getMuffetResponse(channelName,
-              isReturningViewer
-                ? `Saluda brevemente a ${username} que ya es parte del chat y acaba de escribir en este stream. Sé breve y usa tu personalidad.`
-                : `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`,
-              username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Bienvenid@ ${username}! 🎉` });
-            botSay(client, channel, welcomeMsg, true);
-          } catch(e) {
-            client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
-          }
-        }, 2000);
-      }
-    }
-  }
-
-  // ── Si está en silencio ──
-  if (muffetActiveMap[channelName] === false) return;
-
-  // ── Moderación ──
-  if (config.mod_enabled) {
-    const isModOrBroadcaster = isMod(tags, channelName);
-    const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
-    const isVIP = !!tags.badges?.vip;
-    const modCfg = config.mod_config || {};
-    const warnMsg = config.warn_message || '⚠️ Cuidado, dearie~ 🕷️';
-
-    if (!isModOrBroadcaster) {
-
-      // ── Modo lento ──
-      if (modCfg.slow_mode && modCfg.slow_seconds > 0) {
-        if (!slowModeTracker[channelName]) slowModeTracker[channelName] = {};
-        const lastTime = slowModeTracker[channelName][username.toLowerCase()] || 0;
-        const elapsed = (Date.now() - lastTime) / 1000;
-        if (elapsed < modCfg.slow_seconds) {
-          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
-          return;
-        }
-        slowModeTracker[channelName][username.toLowerCase()] = Date.now();
-      }
-
-      // ── Bloqueo de links ──
-      if (modCfg.block_links) {
-        const linkRegex = /https?:\/\/|www\.|\b[a-z0-9-]+\.(com|net|org|gg|tv|io|ly)\b/i; // dominio real (con borde de palabra): ya no confunde "hola.comida" con un link
-        if (linkRegex.test(message)) {
-          const whitelist = (modCfg.link_whitelist || []).map(d => String(d).trim()).filter(Boolean); // una entrada vacía dejaba pasar TODOS los links
-          const isWhitelisted = whitelist.some(domain => message.toLowerCase().includes(domain.toLowerCase()));
-          if (!isWhitelisted && !isSub && !isVIP) {
-            helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
-            client.say(channel, `@${username} Los links no están permitidos~ 🕷️`);
-            if (modCfg.timeout_links) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Link no permitido');
-            return;
-          }
-        }
-      }
-
-      // ── Anti-spam (mensajes repetidos) ──
-      if (modCfg.anti_spam) {
-        if (!spamTracker[channelName]) spamTracker[channelName] = {};
-        if (!spamTracker[channelName][username.toLowerCase()]) spamTracker[channelName][username.toLowerCase()] = { msgs: [], lastMsg: '' };
-        const tracker = spamTracker[channelName][username.toLowerCase()];
-        const now = Date.now();
-        tracker.msgs = tracker.msgs.filter(t => now - t < 10000); // últimos 10s
-        tracker.msgs.push(now);
-        const isRepeat = msgLower === tracker.lastMsg;
-        tracker.lastMsg = msgLower;
-        const maxMsgs = modCfg.spam_max_msgs || 5;
-        if (tracker.msgs.length > maxMsgs || (isRepeat && tracker.msgs.length > 2)) {
-          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
-          client.say(channel, `@${username} ¡No hagas spam, dearie~ 🕷️`);
-          if (modCfg.timeout_spam) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Spam detectado');
-          tracker.msgs = [];
-          return;
-        }
-      }
-
-      // ── Palabras prohibidas ──
-      if (config.banned_words?.length > 0) {
-        if (containsBannedWord(message, config.banned_words)) {
-          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
-          client.say(channel, `@${username} ${warnMsg}`);
-          if (modCfg.timeout_banned) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Palabra prohibida');
-          return;
-        }
-      }
-
-      // ── Moderación con IA (solo Pro) ──
-      if (modCfg.ai_mod && isPro(channelName) && !isSub && !isVIP) {
-        const check = await checkMessageWithAI(message);
-        if (check.flagged) {
-          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
-          client.say(channel, `@${username} ${warnMsg}`);
-          if (modCfg.timeout_ai) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Moderación IA');
-          return;
-        }
-      }
-    }
-  }
-
-// ══════════════════════════════════════════
 //  MODERACIÓN VÍA HELIX API
 //  (Twitch eliminó /timeout y /delete de IRC en 2023 — tmi.js ya no puede moderar)
 // ══════════════════════════════════════════
@@ -1963,6 +1723,247 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000).unref();
+
+// ══════════════════════════════════════════
+//  HANDLER DE MENSAJES
+// ══════════════════════════════════════════
+function isMod(tags, channelName) {
+  return tags.mod || tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channelName.toLowerCase();
+}
+
+async function handleMessage(client, channel, tags, message, self) {
+  if (self) return;
+  if (isKnownBot(tags, tags.username || '')) return;
+
+  const channelName = channel.replace('#', '').toLowerCase();
+
+  // Solo responder en canales registrados en MuffetBot
+  if (!channelConfigs[channelName]) return;
+
+  // Si el canal tiene bot personalizado, solo ESE bot debe procesar los mensajes — el mainClient se hace a un lado
+  // (mismo patrón que ya usamos para raids/subs/bits — evita respuestas y comandos duplicados)
+  if (customClients[channelName] && customClients[channelName] !== client) return;
+
+  // ── Chat compartido (Shared Chat) — ignorar mensajes que no son del propio canal ──
+  // Twitch envía 'source-room-id' cuando el mensaje viene de OTRO canal participante
+  // del shared chat. Si no coincide con el room-id de este canal, el mensaje no es
+  // realmente de aquí y no debe disparar comandos, saludos ni respuestas de IA.
+  if (tags['source-room-id'] && tags['room-id'] && tags['source-room-id'] !== tags['room-id']) {
+    return;
+  }
+
+  const config = channelConfigs[channelName];
+  const username = tags['display-name'] || tags.username;
+  const msgLower = message.trim().toLowerCase();
+  const firstWord = msgLower.split(' ')[0];
+  const botName = TWITCH_BOT_USERNAME.toLowerCase();
+
+  // Ignorar al bot
+  if (username.toLowerCase() === botName) return;
+
+  // Registrar viewer activo para {randomuser}
+  if (!chatViewers[channelName]) chatViewers[channelName] = new Set();
+  chatViewers[channelName].add(username.toLowerCase());
+
+  // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
+  // NOTA: El canje real se procesa vía EventSub en server.js (handleRewardRedemption).
+  // Este bloque solo queda como respaldo si llega vía chat tags (no garantizado).
+
+  // ── Comandos de control (solo mods) ──
+  if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
+    if (!isMod(tags, channelName)) return;
+    muffetSilentMap[channelName] = true;
+    // Auto-desactivar después de 6 horas por si se olvidan (ej. chat compartido que termina)
+    if (muffetSilentTimers[channelName]) clearTimeout(muffetSilentTimers[channelName]);
+    muffetSilentTimers[channelName] = setTimeout(() => {
+      muffetSilentMap[channelName] = false;
+    }, 6 * 60 * 60 * 1000);
+    client.say(channel, '🤫 Modo silencio activado — no responderé a raids, subs, regalos, bits ni mensajes automáticos. Ideal para chats compartidos~ 🕷️');
+    return;
+  }
+
+  if (firstWord === '!muffethabla' || firstWord === '!muffetspeak') {
+    if (!isMod(tags, channelName)) return;
+    muffetSilentMap[channelName] = false;
+    if (muffetSilentTimers[channelName]) { clearTimeout(muffetSilentTimers[channelName]); delete muffetSilentTimers[channelName]; }
+    client.say(channel, '🗣️ ¡Estoy de vuelta, dearies! Ya puedo hablar libremente~ 🕷️👑♥');
+    return;
+  }
+
+  if (firstWord === '!muffeton') {
+    if (!isMod(tags, channelName)) return;
+    muffetActiveMap[channelName] = true;
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on_off_ai: true })
+    }).catch(() => {});
+    let onMsg;
+    const streamerName = channelName.replace('#','');
+    onMsg = await getMuffetResponse(channelName, 
+      `Acabas de activarte en el chat de ${streamerName}. Saluda al chat con energía usando tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
+      username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥' });
+    client.say(channel, onMsg);
+    return;
+  }
+  if (firstWord === '!muffetoff') {
+    if (!isMod(tags, channelName)) return;
+    muffetActiveMap[channelName] = false;
+    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
+      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on_off_ai: false })
+    }).catch(() => {});
+    let offMsg;
+    const streamerNameOff = channelName.replace('#','');
+    offMsg = await getMuffetResponse(channelName, 
+      `Te vas a descansar del chat de ${streamerNameOff}. Despídete del chat con tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
+      username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥' });
+    client.say(channel, offMsg);
+    return;
+  }
+  if (firstWord === '!muffetstatus') {
+    const active = muffetActiveMap[channelName] !== false;
+    const silent = muffetSilentMap[channelName] === true;
+    let statusMsg;
+    if (!active) {
+      statusMsg = `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`;
+    } else if (silent) {
+      statusMsg = `🤫 Activa pero en modo silencio (no responde raids/subs/regalos/bits) — usa !muffethabla para que vuelva a hablar~ 🕷️`;
+    } else {
+      statusMsg = `🟢 La guardiana está activa y hablando con todos~ 🕷️♥`;
+    }
+    client.say(channel, statusMsg);
+    return;
+  }
+
+  // ── Saludo al chatear por primera vez en el stream actual ──
+  // greetedMap se reinicia cada vez que el canal empieza un nuevo stream (ver checkStreamsLive),
+  // así cada viewer recibe un saludo una vez por stream, no una vez para siempre.
+  if (!greetedMap[channelName]) greetedMap[channelName] = new Set();
+  const userLowerGreet = username.toLowerCase();
+  const alreadyGreetedThisStream = greetedMap[channelName].has(userLowerGreet);
+
+  if (!alreadyGreetedThisStream) {
+    greetedMap[channelName].add(userLowerGreet);
+    // Persistir en Supabase agrupado (debounce) — sobrevive reinicios del bot sin un PATCH por cada viewer nuevo
+    scheduleGreetedPersist(channelName);
+    const isReturningViewer = (channelConfigs[channelName]?.viewer_points || {})[userLowerGreet] !== undefined;
+
+    // Durante los 90s tras una raid: se marcan como saludados (arriba) pero sin mensaje individual — el saludo de raid ya los recibió a todos
+    const raidSuppressed = Date.now() < (raidSuppressGreetings[channelName] || 0);
+
+    if (!raidSuppressed && muffetActiveMap[channelName] !== false && !muffetSilentMap[channelName] && Date.now() - BOT_START_TIME > 30000) {
+      const isViewbot = /https?:\/\//i.test(message) ||
+        /buy\s*(followers|viewers|views|subs)/i.test(message) ||
+        /get\s*(views|viewers|followers)/i.test(message) ||
+        /increase.*viewers/i.test(message) ||
+        /cheap.*follow/i.test(message) ||
+        /t\.me\//i.test(message) ||
+        /bit\.ly\//i.test(message);
+      const isCommand = message.trim().startsWith('!');
+      const isBroadcaster = (tags.username || '').toLowerCase() === channelName.toLowerCase() ||
+                            tags.badges?.broadcaster === '1';
+
+      if (!isViewbot && !isCommand && !isBroadcaster) {
+        setTimeout(async () => {
+          try {
+            if (!canAiRespond(channelName)) return;
+            const welcomeMsg = await getMuffetResponse(channelName,
+              isReturningViewer
+                ? `Saluda brevemente a ${username} que ya es parte del chat y acaba de escribir en este stream. Sé breve y usa tu personalidad.`
+                : `Saluda brevemente a ${username} que acaba de llegar al canal por primera vez. Sé breve y usa tu personalidad.`,
+              username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Bienvenid@ ${username}! 🎉` });
+            botSay(client, channel, welcomeMsg, true);
+          } catch(e) {
+            client.say(channel, `¡Bienvenid@ ${username}! 🎉`);
+          }
+        }, 2000);
+      }
+    }
+  }
+
+  // ── Si está en silencio ──
+  if (muffetActiveMap[channelName] === false) return;
+
+  // ── Moderación ──
+  if (config.mod_enabled) {
+    const isModOrBroadcaster = isMod(tags, channelName);
+    const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
+    const isVIP = !!tags.badges?.vip;
+    const modCfg = config.mod_config || {};
+    const warnMsg = config.warn_message || '⚠️ Cuidado, dearie~ 🕷️';
+
+    if (!isModOrBroadcaster) {
+
+      // ── Modo lento ──
+      if (modCfg.slow_mode && modCfg.slow_seconds > 0) {
+        if (!slowModeTracker[channelName]) slowModeTracker[channelName] = {};
+        const lastTime = slowModeTracker[channelName][username.toLowerCase()] || 0;
+        const elapsed = (Date.now() - lastTime) / 1000;
+        if (elapsed < modCfg.slow_seconds) {
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
+          return;
+        }
+        slowModeTracker[channelName][username.toLowerCase()] = Date.now();
+      }
+
+      // ── Bloqueo de links ──
+      if (modCfg.block_links) {
+        const linkRegex = /https?:\/\/|www\.|\b[a-z0-9-]+\.(com|net|org|gg|tv|io|ly)\b/i; // dominio real (con borde de palabra): ya no confunde "hola.comida" con un link
+        if (linkRegex.test(message)) {
+          const whitelist = (modCfg.link_whitelist || []).map(d => String(d).trim()).filter(Boolean); // una entrada vacía dejaba pasar TODOS los links
+          const isWhitelisted = whitelist.some(domain => message.toLowerCase().includes(domain.toLowerCase()));
+          if (!isWhitelisted && !isSub && !isVIP) {
+            helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
+            client.say(channel, `@${username} Los links no están permitidos~ 🕷️`);
+            if (modCfg.timeout_links) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Link no permitido');
+            return;
+          }
+        }
+      }
+
+      // ── Anti-spam (mensajes repetidos) ──
+      if (modCfg.anti_spam) {
+        if (!spamTracker[channelName]) spamTracker[channelName] = {};
+        if (!spamTracker[channelName][username.toLowerCase()]) spamTracker[channelName][username.toLowerCase()] = { msgs: [], lastMsg: '' };
+        const tracker = spamTracker[channelName][username.toLowerCase()];
+        const now = Date.now();
+        tracker.msgs = tracker.msgs.filter(t => now - t < 10000); // últimos 10s
+        tracker.msgs.push(now);
+        const isRepeat = msgLower === tracker.lastMsg;
+        tracker.lastMsg = msgLower;
+        const maxMsgs = modCfg.spam_max_msgs || 5;
+        if (tracker.msgs.length > maxMsgs || (isRepeat && tracker.msgs.length > 2)) {
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
+          client.say(channel, `@${username} ¡No hagas spam, dearie~ 🕷️`);
+          if (modCfg.timeout_spam) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Spam detectado');
+          tracker.msgs = [];
+          return;
+        }
+      }
+
+      // ── Palabras prohibidas ──
+      if (config.banned_words?.length > 0) {
+        if (containsBannedWord(message, config.banned_words)) {
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
+          client.say(channel, `@${username} ${warnMsg}`);
+          if (modCfg.timeout_banned) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Palabra prohibida');
+          return;
+        }
+      }
+
+      // ── Moderación con IA (solo Pro) ──
+      if (modCfg.ai_mod && isPro(channelName) && !isSub && !isVIP) {
+        const check = await checkMessageWithAI(message);
+        if (check.flagged) {
+          helixDeleteMessage(client, channelName, tags['room-id'], tags.id);
+          client.say(channel, `@${username} ${warnMsg}`);
+          if (modCfg.timeout_ai) helixTimeout(client, channelName, tags['room-id'], tags['user-id'], modCfg.timeout_duration || 60, 'Moderación IA');
+          return;
+        }
+      }
+    }
+  }
+
 
   if (firstWord === '!cola' || firstWord === '!queue') {
     try {
