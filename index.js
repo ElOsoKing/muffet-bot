@@ -395,6 +395,25 @@ function trackCommandUse(channel, trigger) {
   if (!statsFlushTimer) statsFlushTimer = setTimeout(flushStats, 30000);
 }
 
+// Veces que se ha usado un comando (para la variable {cmdcount}): lo guardado en Supabase + lo pendiente de guardar
+const cmdCountCache = {}; // { 'canal:!cmd': { ts, base } }
+async function getCommandUseCount(channel, trigger) {
+  if (!trigger) return 0;
+  const key = `${channel}:${trigger}`;
+  const hit = cmdCountCache[key];
+  let base = hit?.base || 0;
+  if (!hit || Date.now() - hit.ts > 30000) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channel}&select=command_stats&limit=1`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
+      const data = await res.json();
+      base = Number(data?.[0]?.command_stats?.[trigger]) || 0;
+      cmdCountCache[key] = { ts: Date.now(), base };
+    } catch (e) { /* si falla se usa el último valor conocido */ }
+  }
+  return base + (statsBuffer[key] || 0);
+}
+
 async function flushStats() {
   statsFlushTimer = null;
   if (Object.keys(statsBuffer).length === 0) return;
@@ -415,7 +434,7 @@ async function flushStats() {
       const data = await res.json();
       const current = (data && data[0] && data[0].command_stats) || {};
       const updated = { ...current };
-      for (const [cmd, count] of Object.entries(newStats)) updated[cmd] = (updated[cmd] || 0) + count;
+      for (const [cmd, count] of Object.entries(newStats)) { updated[cmd] = (updated[cmd] || 0) + count; delete cmdCountCache[`${ch}:${cmd}`]; }
       await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
         method: 'PATCH',
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -703,14 +722,41 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
   });
 }
 
-async function resolveVariables(text, channelName, username, touser) {
+// ctx (opcional): { args: [palabras escritas después del comando], cmd: '!comando' } — para {args}, {1}..{9}, {cmd}, {cmdcount}
+async function resolveVariables(text, channelName, username, touser, ctx = {}) {
   let result = text;
   result = result.replace(/\{user\}/g, username);
   result = result.replace(/\{touser\}/g, touser || username);
   result = result.replace(/\{channel\}/g, channelName);
 
-  // Variable {redes}
   const config = channelConfigs[channelName];
+
+  // Variable {points} / {pointsname} — puntos del que escribe el comando y cómo se llaman en este canal
+  if (result.includes('{points}') || result.includes('{pointsname}')) {
+    const pc = config?.points_config || {};
+    const pts = Number((config?.viewer_points || {})[username.toLowerCase()]) || 0;
+    result = result.replace(/\{points\}/g, String(pts));
+    result = result.replace(/\{pointsname\}/g, () => pc.name || 'puntos');
+  }
+
+  // Variable {cmd} y {cmdcount} — el comando usado y cuántas veces se ha usado (cuenta esta vez)
+  if (result.includes('{cmd}')) result = result.replace(/\{cmd\}/g, () => ctx.cmd || '');
+  if (result.includes('{cmdcount}')) {
+    const n = await getCommandUseCount(channelName, ctx.cmd);
+    result = result.replace(/\{cmdcount\}/g, String(n));
+  }
+
+  // Variables {time} y {date} — hora y fecha en una zona horaria: {time:America/Santo_Domingo}. Sin zona usa UTC.
+  if (result.includes('{time') || result.includes('{date')) {
+    const fmt = (zone, opts) => {
+      try { return new Intl.DateTimeFormat('es', { timeZone: zone || 'UTC', ...opts }).format(new Date()); }
+      catch (e) { return '?'; }
+    };
+    result = result.replace(/\{time(?::([A-Za-z_\/+-]+))?\}/g, (_, z) => fmt(z, { hour: '2-digit', minute: '2-digit', hour12: false }) + (z ? '' : ' UTC'));
+    result = result.replace(/\{date(?::([A-Za-z_\/+-]+))?\}/g, (_, z) => fmt(z, { day: '2-digit', month: '2-digit', year: 'numeric' }));
+  }
+
+  // Variable {redes}
   if (result.includes('{redes}')) {
     const socials = formatSocials(config?.social_links || {});
     result = result.replace(/\{redes\}/g, socials || 'Sin redes configuradas');
@@ -810,7 +856,7 @@ async function resolveVariables(text, channelName, username, touser) {
     }
   }
 
-  if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}')) {
+  if (result.includes('{game}') || result.includes('{title}') || result.includes('{uptime}') || result.includes('{viewers}')) {
     try {
       const { token } = await getFreshStreamerToken(channelName);
 
@@ -825,6 +871,7 @@ async function resolveVariables(text, channelName, username, touser) {
         if (stream) {
           result = result.replace(/\{game\}/g, stream.game_name || 'un juego');
           result = result.replace(/\{title\}/g, stream.title || 'sin título');
+          result = result.replace(/\{viewers\}/g, String(stream.viewer_count ?? 0));
           // Calcular uptime
           const start = new Date(stream.started_at);
           const diff = Math.floor((Date.now() - start) / 1000);
@@ -836,12 +883,21 @@ async function resolveVariables(text, channelName, username, touser) {
           result = result.replace(/\{game\}/g, 'offline');
           result = result.replace(/\{title\}/g, 'sin stream');
           result = result.replace(/\{uptime\}/g, '0m');
+          result = result.replace(/\{viewers\}/g, '0');
         }
       }
     } catch(e) {
-      result = result.replace(/\{game\}/g, '?').replace(/\{title\}/g, '?').replace(/\{uptime\}/g, '?');
+      result = result.replace(/\{game\}/g, '?').replace(/\{title\}/g, '?').replace(/\{uptime\}/g, '?').replace(/\{viewers\}/g, '?');
     }
   }
+
+  // {args} y {1}..{9} van AL FINAL: lo que escribe el viewer se pone ya resuelto el resto, así no puede
+  // colar otras variables ni forzar consultas. Se limita el largo y se quita un / . ! inicial para que
+  // no pueda hacer que el bot empiece un mensaje como si fuera un comando.
+  const argList = Array.isArray(ctx.args) ? ctx.args : [];
+  const cleanArg = (v) => String(v ?? '').replace(/[\u0000-\u001f]/g, ' ').slice(0, 200).replace(/^[\/.!\s]+/, '').trim();
+  if (result.includes('{args}')) result = result.replace(/\{args\}/g, () => cleanArg(argList.join(' ')));
+  if (/\{[1-9]\}/.test(result)) result = result.replace(/\{([1-9])\}/g, (_, n) => cleanArg(argList[parseInt(n, 10) - 1]));
   return result;
 }
 // ── Sistema de cooldowns y anti-spam ──
@@ -3870,7 +3926,7 @@ async function handleMessage(client, channel, tags, message, self) {
 
     const args = message.trim().split(/\s+/).slice(1).filter(Boolean);
     const touser = args[0] ? args[0].replace('@', '').trim() : username;
-    const resolved = await resolveVariables(response, channelName, username, touser);
+    const resolved = await resolveVariables(response, channelName, username, touser, { args, cmd: firstWord });
     client.say(channel, resolved);
     return;
   }
