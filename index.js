@@ -4274,8 +4274,14 @@ async function start() {
     if (!autoMsgQueue[ch]?.items?.length) return;
     autoMsgQueue[ch].processing = true;
     while (autoMsgQueue[ch].items.length > 0) {
-      const { text, channelName } = autoMsgQueue[ch].items.shift();
+      const queued = autoMsgQueue[ch].items.shift();
+      const channelName = queued.channelName;
+      let text = queued.text;
       const client = customClients[channelName] || mainClient;
+      // Los mensajes automáticos también entienden variables ({redes}, {game}, {viewers}, {time:Zona}...)
+      if (typeof text === 'string' && text.includes('{')) {
+        try { text = await resolveVariables(text, channelName, channelName, channelName, { args: [], cmd: '' }) || text; } catch (e) { /* si falla se envía tal cual */ }
+      }
       try {
         client.say(`#${channelName}`, text).catch(() => {});
       } catch(e) {
