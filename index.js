@@ -395,6 +395,18 @@ function trackCommandUse(channel, trigger) {
   if (!statsFlushTimer) statsFlushTimer = setTimeout(flushStats, 30000);
 }
 
+// Última respuesta de cada comando por canal (para la "espera" entre respuestas de un mismo comando)
+const cmdLastReply = {}; // { 'canal:comando': timestamp }
+function cmdOnCooldown(channelName, trigger, seconds) {
+  const sec = Number(seconds) || 0;
+  if (sec <= 0) return false;
+  const key = `${channelName}:${trigger}`;
+  const now = Date.now();
+  if (now - (cmdLastReply[key] || 0) < sec * 1000) return true;
+  cmdLastReply[key] = now;
+  return false;
+}
+
 // Veces que se ha usado un comando (para la variable {cmdcount}): lo guardado en Supabase + lo pendiente de guardar
 const cmdCountCache = {}; // { 'canal:!cmd': { ts, base } }
 async function getCommandUseCount(channel, trigger) {
@@ -1824,6 +1836,32 @@ async function handleMessage(client, channel, tags, message, self) {
   // ── Detección de canjes de puntos de canal (Channel Point Redemptions) ──
   // NOTA: El canje real se procesa vía EventSub en server.js (handleRewardRedemption).
   // Este bloque solo queda como respaldo si llega vía chat tags (no garantizado).
+
+  // ── Comandos de palabra suelta (sin "!") — responden solo si el mensaje es EXACTAMENTE esa palabra ──
+  // Ejemplo: comando "f" con respuesta "Han presionado F {cmdcount} veces". Cada F suma al contador, pero el bot
+  // contesta como mucho una vez cada "cooldown" segundos (10 por defecto) para no llenar el chat.
+  if (config?.commands && !msgLower.startsWith('!') && msgLower.length <= 40) {
+    const plainKey = msgLower.replace(/[\s.!?¡¿,]+$/u, '');
+    const plainCmd = plainKey ? config.commands[plainKey] : null;
+    if (plainCmd && !plainKey.startsWith('!')) {
+      const resp = typeof plainCmd === 'object' ? plainCmd.response : plainCmd;
+      const permsP = typeof plainCmd === 'object' && Array.isArray(plainCmd.perms) && plainCmd.perms.length ? plainCmd.perms : ['everyone'];
+      const isBc = tags.badges?.broadcaster === '1' || tags.username?.toLowerCase() === channelName;
+      const isModP = tags.mod || isBc;
+      const okP = permsP.includes('everyone') || isModP ||
+        (permsP.includes('broadcaster') && isBc) ||
+        (permsP.includes('vip') && !!tags.badges?.vip) ||
+        (permsP.includes('sub') && (!!tags.subscriber || !!tags.badges?.subscriber));
+      if (okP) trackCommandUse(channelName, plainKey); // cuenta siempre (aunque el bot no conteste por la espera), pero solo si tiene permiso
+      const cdP = (typeof plainCmd === 'object' && plainCmd.cooldown !== undefined && plainCmd.cooldown !== null && plainCmd.cooldown !== '') ? Number(plainCmd.cooldown) : 10;
+      if (resp && okP && !cmdOnCooldown(channelName, plainKey, cdP)) {
+        try {
+          const outP = await resolveVariables(resp, channelName, username, username, { args: [], cmd: plainKey });
+          if (outP) client.say(channel, outP);
+        } catch (e) { console.error('[plain-cmd]', e.message); }
+      }
+    }
+  }
 
   // ── Comandos de control (solo mods) ──
   if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
@@ -3906,7 +3944,7 @@ async function handleMessage(client, channel, tags, message, self) {
   }
 
   // ── Comandos dinámicos ──
-  if (config.commands?.[firstWord]) {
+  if (firstWord.startsWith('!') && config.commands?.[firstWord]) {
     trackCommandUse(channelName, firstWord);
     const cmd = config.commands[firstWord];
     const response = typeof cmd === 'object' ? cmd.response : cmd;
@@ -3923,6 +3961,7 @@ async function handleMessage(client, channel, tags, message, self) {
       (perms.includes('sub') && isSub);
 
     if (!canUse) return;
+    if (typeof cmd === 'object' && cmdOnCooldown(channelName, firstWord, cmd.cooldown)) return; // espera opcional del comando
 
     const args = message.trim().split(/\s+/).slice(1).filter(Boolean);
     const touser = args[0] ? args[0].replace('@', '').trim() : username;
