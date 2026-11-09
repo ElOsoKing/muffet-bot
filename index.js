@@ -361,7 +361,7 @@ async function loadAllChannels() {
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
-      if (muffetActiveMap[ch] === undefined) muffetActiveMap[ch] = s.on_off_ai !== false;
+      muffetActiveMap[ch] = true; // sin comandos de apagado: nunca queda silenciado por un on_off_ai=false viejo
       if (!greetedMap[ch]) {
         // Restaurar lista de saludados desde Supabase — sobrevive reinicios del bot
         greetedMap[ch] = new Set(Array.isArray(s.greeted_users) ? s.greeted_users : []);
@@ -1908,71 +1908,7 @@ async function handleMessage(client, channel, tags, message, self) {
     }
   }
 
-  // ── Comandos de control (solo mods) ──
-  if (firstWord === '!muffetsilencio' || firstWord === '!muffetsilent') {
-    if (!isMod(tags, channelName)) return;
-    muffetSilentMap[channelName] = true;
-    // Auto-desactivar después de 6 horas por si se olvidan (ej. chat compartido que termina)
-    if (muffetSilentTimers[channelName]) clearTimeout(muffetSilentTimers[channelName]);
-    muffetSilentTimers[channelName] = setTimeout(() => {
-      muffetSilentMap[channelName] = false;
-    }, 6 * 60 * 60 * 1000);
-    client.say(channel, '🤫 Modo silencio activado — no responderé a raids, subs, regalos, bits ni mensajes automáticos. Ideal para chats compartidos~ 🕷️');
-    return;
-  }
-
-  if (firstWord === '!muffethabla' || firstWord === '!muffetspeak') {
-    if (!isMod(tags, channelName)) return;
-    muffetSilentMap[channelName] = false;
-    if (muffetSilentTimers[channelName]) { clearTimeout(muffetSilentTimers[channelName]); delete muffetSilentTimers[channelName]; }
-    client.say(channel, '🗣️ ¡Estoy de vuelta, dearies! Ya puedo hablar libremente~ 🕷️👑♥');
-    return;
-  }
-
-  if (firstWord === '!muffeton') {
-    if (!isMod(tags, channelName)) return;
-    muffetActiveMap[channelName] = true;
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on_off_ai: true })
-    }).catch(() => {});
-    let onMsg;
-    const streamerName = channelName.replace('#','');
-    onMsg = await getMuffetResponse(channelName, 
-      `Acabas de activarte en el chat de ${streamerName}. Saluda al chat con energía usando tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
-      username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: config.on_message || '¡La guardiana ha despertado! 🕷️ ¡Estoy de vuelta, dearies! 👑♥' });
-    client.say(channel, onMsg);
-    return;
-  }
-  if (firstWord === '!muffetoff') {
-    if (!isMod(tags, channelName)) return;
-    muffetActiveMap[channelName] = false;
-    fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${channelName}`, {
-      method: 'PATCH', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on_off_ai: false })
-    }).catch(() => {});
-    let offMsg;
-    const streamerNameOff = channelName.replace('#','');
-    offMsg = await getMuffetResponse(channelName, 
-      `Te vas a descansar del chat de ${streamerNameOff}. Despídete del chat con tu personalidad única. Sé breve, máximo 2 oraciones. No uses comillas.`, 
-      username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: config.off_message || '¡La guardiana se va a descansar~ 🕷️ ¡Hasta pronto, dearies! ♥' });
-    client.say(channel, offMsg);
-    return;
-  }
-  if (firstWord === '!muffetstatus') {
-    const active = muffetActiveMap[channelName] !== false;
-    const silent = muffetSilentMap[channelName] === true;
-    let statusMsg;
-    if (!active) {
-      statusMsg = `🔴 La guardiana está descansando~ 🕷️ Usa !muffeton para despertarla`;
-    } else if (silent) {
-      statusMsg = `🤫 Activa pero en modo silencio (no responde raids/subs/regalos/bits) — usa !muffethabla para que vuelva a hablar~ 🕷️`;
-    } else {
-      statusMsg = `🟢 La guardiana está activa y hablando con todos~ 🕷️♥`;
-    }
-    client.say(channel, statusMsg);
-    return;
-  }
+  // (!muffeton/!muffetoff/!muffetsilencio/!muffethabla/!muffetstatus eliminados: ya no hacen falta)
 
   // ── Saludo al chatear por primera vez en el stream actual ──
   // greetedMap se reinicia cada vez que el canal empieza un nuevo stream (ver checkStreamsLive),
