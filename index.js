@@ -734,6 +734,51 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
   });
 }
 
+
+// ── Subatón en colaboración ──────────────────────────────────────────────────────────
+// Un streamer con subatón puede poner en su config "linked_channels" (canales de amigos). Las subs, gift subs y bits que
+// reciba el AMIGO en su chat suman tiempo al subatón del dueño. El amigo no tiene que hacer nada (el bot solo lee su chat).
+const cleanLinkedName = (c) => String(c || '').toLowerCase().replace(/^[#@]+/, '').trim();
+function subathonOwnersLinkedTo(ch) {
+  const owners = [];
+  for (const [owner, cfg] of Object.entries(channelConfigs)) {
+    if (owner === ch) continue;
+    const sc = cfg?.subathon_config;
+    if (!sc?.enabled || !Array.isArray(sc.linked_channels)) continue;
+    if (sc.linked_channels.some(c => cleanLinkedName(c) === ch)) owners.push(owner);
+  }
+  return owners;
+}
+// minutesFn(cfgDelDueño) → minutos a sumar con la config de CADA dueño. Anuncia en el chat del dueño.
+function addLinkedSubathonTime(ch, minutesFn, reason, contributorUsername) {
+  for (const owner of subathonOwnersLinkedTo(ch)) {
+    const c = customClients[owner] || mainClient;
+    addSubathonTime(c, `#${owner}`, owner, minutesFn, `${reason} (en el canal de ${ch})`, contributorUsername);
+  }
+}
+const linkedJoined = new Set();
+async function syncLinkedChannels() {
+  if (!mainClient) return;
+  const wanted = new Set();
+  for (const cfg of Object.values(channelConfigs)) {
+    const sc = cfg?.subathon_config;
+    if (!sc?.enabled || !Array.isArray(sc.linked_channels)) continue;
+    for (const raw of sc.linked_channels) { const c = cleanLinkedName(raw); if (/^[a-z0-9_]{3,25}$/.test(c)) wanted.add(c); }
+  }
+  const current = mainClient.getChannels().map(c => c.replace('#', ''));
+  for (const ch of wanted) {
+    if (channelConfigs[ch]) continue; // ya es canal registrado: lo escucha el bot normal
+    if (current.includes(ch)) { linkedJoined.add(ch); continue; }
+    try { await mainClient.join(ch); linkedJoined.add(ch); console.log(`🔗 Escuchando #${ch} para el subatón en colaboración`); }
+    catch (e) { console.error(`[subathon] no pude unirme a #${ch} (colaboración):`, String(e)); }
+  }
+  for (const ch of [...linkedJoined]) {
+    if (wanted.has(ch) || channelConfigs[ch]) continue;
+    try { await mainClient.part(`#${ch}`); } catch (e) {}
+    linkedJoined.delete(ch);
+  }
+}
+
 // ctx (opcional): { args: [palabras escritas después del comando], cmd: '!comando' } — para {args}, {1}..{9}, {cmd}, {cmdcount}
 async function resolveVariables(text, channelName, username, touser, ctx = {}) {
   let result = text;
@@ -4018,11 +4063,14 @@ function setupEvents(client) {
   client.on('subscription', async (channel, username, methods) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1; // Prime ('Prime') cuenta como Tier 1
+    const tier = methods?.plan === 'Prime' ? 'Prime' : `Tier ${tierNum}`;
+    console.log(`[sub] #${ch}: ${username} plan=${methods?.plan}`);
+    // El subatón se procesa ANTES del filtro de "bot apagado/silencioso": suma tiempo aunque Muffet no hable
+    if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `sub ${tier} de @${username}`, username);
+    addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `sub ${tier} de @${username}`, username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
-    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
-    const tier = `Tier ${tierNum}`;
-    const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `sub ${tier} de @${username}`, username);
+    if (!channelConfigs[ch]) return;
     if (!isSysCmdEnabled(ch, 'alert_sub')) return; // el subatón ya sumó; solo se apaga el agradecimiento
     // Sin canAiRespond — las subs son eventos importantes y no deben perderse por el cooldown
     const msg = await getMuffetResponse(ch, `@${username} acaba de suscribirse al canal (${tier}). Agradécele con entusiasmo.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Gracias por suscribirte, @${username}! 🕷️♥` });
@@ -4032,13 +4080,25 @@ function setupEvents(client) {
   client.on('resub', async (channel, username, months, message, userstate, methods) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1; // Prime cuenta como Tier 1
+    console.log(`[resub] #${ch}: ${username} plan=${methods?.plan}`);
+    if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `resub de @${username}`, username);
+    addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `resub de @${username}`, username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
-    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
-    const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `resub de @${username}`, username);
+    if (!channelConfigs[ch]) return;
     if (!isSysCmdEnabled(ch, 'alert_sub')) return;
     const msg = await getMuffetResponse(ch, `@${username} lleva ${months} meses suscrito al canal. Agradécele su lealtad.`, username, { event: true, maxChars: EVENT_MSG_MAX_CHARS, fallback: `¡Gracias por tus ${months} meses, @${username}! 🕷️♥` });
     botSay(client, channel, msg, true);
+  });
+
+  // Prime → sub pagada: Twitch lo manda como evento aparte (no es 'subscription'). Suma como Tier 1 (o el tier al que subió)
+  client.on('primepaidupgrade', async (channel, username, methods) => {
+    const ch = channel.replace('#','');
+    if (customClients[ch] && customClients[ch] !== client) return;
+    const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
+    console.log(`[primepaidupgrade] #${ch}: ${username} plan=${methods?.plan}`);
+    if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `sub de @${username} (de Prime a pagada)`, username);
+    addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `sub de @${username} (de Prime a pagada)`, username);
   });
 
   // ── Regalos de subs: Muffet agradece UNA sola vez, solo a quien regala (nunca a cada receptor) ──
@@ -4052,7 +4112,6 @@ function setupEvents(client) {
   client.on('submysterygift', async (channel, username, numbOfSubs, methods, tags) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
-    if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Marcar el regalo masivo para que sus avisos individuales no se procesen
     mysteryGiftBuffer[`${ch}_${username}`] = Date.now();
     const originId = tags?.['msg-param-origin-id'];
@@ -4066,7 +4125,10 @@ function setupEvents(client) {
     const minutesEach = subMinutes(cfg, tierNum);
     console.log(`[gift] Regalo masivo en #${ch}: ${anon ? 'anónimo' : username} regaló ${numbOfSubs} subs Tier ${tierNum} (origin-id: ${originId || 'sin etiqueta'})`);
     // Los anónimos suman tiempo al subatón, pero no entran al ranking de contribuidores
-    addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    if (channelConfigs[ch]) addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum) * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    if (!channelConfigs[ch]) return;
     if (!isSysCmdEnabled(ch, 'alert_gift')) return;
     const prompt = anon
       ? `Alguien anónimo acaba de regalar ${numbOfSubs} suscripcion${numbOfSubs>1?'es':''} al canal. Menciona el número exacto (${numbOfSubs}) y agradécele su generosidad, sin mencionar ningún nombre de usuario.`
@@ -4079,7 +4141,6 @@ function setupEvents(client) {
   client.on('subgift', async (channel, username, streakMonths, recipient, methods, tags) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
-    if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
 
     // ¿Este aviso individual es parte de un regalo masivo? Entonces ya se agradeció con el aviso general — ignorar
     const communityId = tags?.['msg-param-community-gift-id'];
@@ -4093,7 +4154,10 @@ function setupEvents(client) {
     const anon = isAnonGifter(username);
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    if (!channelConfigs[ch]) return;
     if (!isSysCmdEnabled(ch, 'alert_gift')) return;
     // Solo se agradece a quien regala — el receptor no se menciona
     const prompt = anon
@@ -4107,16 +4171,18 @@ function setupEvents(client) {
   client.on('cheer', async (channel, tags, message) => {
     const ch = channel.replace('#','');
     if (customClients[ch] && customClients[ch] !== client) return;
-    if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const username = tags.username;
     const bits = parseInt(tags.bits) || 0;
 
     // El subatón suma tiempo con cualquier cantidad de bits — no depende del mínimo para agradecer
+    const bitsMin = (c) => (c.bits_unit > 0) ? Math.floor(bits / c.bits_unit) * (c.minutes_per_bits_unit || 0) : 0;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    if (cfg.bits_unit > 0) {
-      const units = Math.floor(bits / cfg.bits_unit);
-      addSubathonTime(client, channel, ch, units * (cfg.minutes_per_bits_unit || 0), `${bits} bits de @${username}`, username);
+    if (channelConfigs[ch] && cfg.bits_unit > 0) {
+      addSubathonTime(client, channel, ch, bitsMin(cfg), `${bits} bits de @${username}`, username);
     }
+    addLinkedSubathonTime(ch, bitsMin, `${bits} bits de @${username}`, username);
+    if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    if (!channelConfigs[ch]) return;
 
     if (!isSysCmdEnabled(ch, 'alert_bits')) return; // interruptor del dashboard
     // Solo agradecer si son al menos MIN_BITS_TO_THANK bits
@@ -4252,6 +4318,7 @@ async function start() {
   // Configurar bots personalizados para usuarios Pro (antes, renovar los tokens que estén por vencer)
   await refreshCustomBotTokens();
   await setupCustomBots();
+  await syncLinkedChannels();
   setInterval(refreshCustomBotTokens, 15 * 60 * 1000);
 
   // Iniciar polling de ganadores de sorteo
@@ -4400,6 +4467,7 @@ async function start() {
     await setupCustomBots();
     scheduleAutoMessages();
     scheduleEmojiAutoGames();
+    await syncLinkedChannels();
     const currentChannels = mainClient.getChannels().map(c => c.replace('#',''));
     const allChannels = Object.keys(channelConfigs);
     for (const ch of allChannels) {
