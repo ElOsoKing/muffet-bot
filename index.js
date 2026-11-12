@@ -779,6 +779,16 @@ async function syncLinkedChannels() {
   }
 }
 
+// "!apostar todo" / "!slots all" / "!duelo @x allin" → apuesta todo el saldo (topado al máximo por apuesta del canal)
+const ALL_IN_WORDS = new Set(['all', 'todo', 'allin', 'all-in', 'todito']);
+function parseBetAmount(raw, channelName, username, maxBet) {
+  if (ALL_IN_WORDS.has(String(raw || '').toLowerCase())) {
+    const bal = (channelConfigs[channelName]?.viewer_points || {})[String(username).toLowerCase()] || 0;
+    return { amount: Math.min(bal, maxBet), allIn: true };
+  }
+  return { amount: parseInt(raw), allIn: false };
+}
+
 // ctx (opcional): { args: [palabras escritas después del comando], cmd: '!comando' } — para {args}, {1}..{9}, {cmd}, {cmdcount}
 async function resolveVariables(text, channelName, username, touser, ctx = {}) {
   let result = text;
@@ -2458,12 +2468,13 @@ async function handleMessage(client, channel, tags, message, self) {
     const pointsConfig = config.points_config || {};
     if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
 
-    const amount = parseInt(message.trim().split(/\s+/)[1]);
     const maxBet = pointsConfig.max_bet || 500;
+    const { amount, allIn } = parseBetAmount(message.trim().split(/\s+/)[1], channelName, username, maxBet);
     const emoji = pointsConfig.emoji || '🏆';
     const name = pointsConfig.name || 'puntos';
 
-    if (!amount || amount < 1) { client.say(channel, `@${username} Uso: !slots 100 🎰🕷️`); return; }
+    if (allIn && !(amount >= 1)) { client.say(channel, `@${username} No tienes ${name} para apostar~ 🕷️`); return; }
+    if (!amount || amount < 1) { client.say(channel, `@${username} Uso: !slots 100 (o !slots todo) 🎰🕷️`); return; }
     if (amount > maxBet) { client.say(channel, `@${username} Máximo ${maxBet} ${name} por tirada~ 🕷️`); return; }
 
     const slotsCooldownKey = `${channelName}_${username.toLowerCase()}`;
@@ -2522,14 +2533,15 @@ async function handleMessage(client, channel, tags, message, self) {
     if (!pointsConfig.enabled) { client.say(channel, `@${username} El sistema de puntos no está activo~ 🕷️`); return; }
 
     const args = message.trim().split(/\s+/);
-    const amount = parseInt(args[1]);
     const riskArg = (args[2] || '').toLowerCase();
     const maxBet = pointsConfig.max_bet || 500;
+    const { amount, allIn } = parseBetAmount(args[1], channelName, username, maxBet);
     const emoji = pointsConfig.emoji || '🏆';
     const name = pointsConfig.name || 'puntos';
 
+    if (allIn && !(amount >= 1)) { client.say(channel, `@${username} No tienes ${name} para apostar~ 🕷️`); return; }
     if (!amount || amount < 1) {
-      client.say(channel, `@${username} Uso: !apostar 100 [facil|arriesgado|extremo] — 🎲 facil: 50% gana x2 · 🔥 arriesgado: 25% gana x4 · 💀 extremo: 10% gana x9 🕷️`);
+      client.say(channel, `@${username} Uso: !apostar 100 (o todo) [facil|arriesgado|extremo] — 🎲 facil: 50% gana x2 · 🔥 arriesgado: 25% gana x4 · 💀 extremo: 10% gana x9 🕷️`);
       return;
     }
     if (amount > maxBet) { client.say(channel, `@${username} Máximo ${maxBet} ${name} por apuesta~ 🕷️`); return; }
@@ -3717,10 +3729,10 @@ async function handleMessage(client, channel, tags, message, self) {
 
     const parts = message.trim().split(' ');
     const target = parts[1]?.replace('@','').toLowerCase();
-    const amount = parseInt(parts[2]);
     const emoji = pointsConfig.emoji || '🏆';
     const name = pointsConfig.name || 'puntos';
     const maxBet = pointsConfig.max_bet || 500;
+    const amount = parseInt(parts[2]); // el duelo no acepta "todo": siempre una cantidad fija
 
     if (!target || !amount || amount < 1) {
       client.say(channel, `@${username} Uso: !duelo @usuario cantidad — Ej: !duelo @wolf 100 🕷️`);
