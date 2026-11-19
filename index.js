@@ -2704,7 +2704,7 @@ async function handleMessage(client, channel, tags, message, self) {
 
   // ── Comandos de puntos ──
   // !propina / !tip / !donar → link a la página de propinas (si el canal las activó y no tiene un comando propio con ese nombre)
-  if ((firstWord === '!propina' || firstWord === '!tip' || firstWord === '!donar') && channelConfigs[channelName]?.tips_config?.enabled && !channelConfigs[channelName]?.commands?.[firstWord]) {
+  if ((firstWord === '!propina' || firstWord === '!tip' || firstWord === '!donar') && channelConfigs[channelName]?.tips_config?.enabled && isSysCmdEnabled(channelName, 'propina') && !channelConfigs[channelName]?.commands?.[firstWord]) {
     const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
     client.say(channel, `💸 ¿Quieres apoyar el canal? Deja tu propina aquí: ${base}/tip/${channelName} 🕷️♥`);
     return;
