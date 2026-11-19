@@ -287,7 +287,7 @@ const defaultConfig = (username) => ({
 // ══════════════════════════════════════════
 //  CARGAR TODOS LOS CANALES APROBADOS
 // ══════════════════════════════════════════
-const LOAD_CHANNEL_COLUMNS = ['ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'feature_flags', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
+const LOAD_CHANNEL_COLUMNS = ['tips_config', 'ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'feature_flags', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
 let greetedLoadedOnce = false;
 // Canales con puntos/XP sin guardar en Supabase: loadAllChannels NO debe pisar la memoria con datos viejos de la BD
 const viewerPointsDirty = {};
@@ -2703,6 +2703,12 @@ async function handleMessage(client, channel, tags, message, self) {
   }
 
   // ── Comandos de puntos ──
+  // !propina / !tip / !donar → link a la página de propinas (si el canal las activó y no tiene un comando propio con ese nombre)
+  if ((firstWord === '!propina' || firstWord === '!tip' || firstWord === '!donar') && channelConfigs[channelName]?.tips_config?.enabled && !channelConfigs[channelName]?.commands?.[firstWord]) {
+    const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
+    client.say(channel, `💸 ¿Quieres apoyar el canal? Deja tu propina aquí: ${base}/tip/${channelName} 🕷️♥`);
+    return;
+  }
   if (firstWord === '!puntos' || firstWord === '!xp' || firstWord === '!nivel' || firstWord === '!level') {
     if (!isSysCmdEnabled(channelName, 'puntos')) return;
     const target = message.trim().split(' ')[1]?.replace('@','').toLowerCase() || username.toLowerCase();
@@ -4533,6 +4539,25 @@ async function handleTwitchEvent(type, event) {
       }
     }
     client2.say(`#${channel}`, msg);
+    return;
+  }
+
+  // ── Propina con PayPal (el servidor ya confirmó el pago con PayPal) ──
+  if (type === 'tip.received') {
+    const ch = String(event.channel || '').toLowerCase();
+    const cfg = channelConfigs[ch];
+    if (!cfg) return;
+    const name = String(event.name || 'Anónimo').replace(/[^\p{L}\p{N} _.\-]/gu, '').slice(0, 25) || 'Anónimo';
+    const amount = Number(event.amount) || 0;
+    const money = `${amount.toFixed(2)} ${String(event.currency || 'USD').slice(0, 3)}`;
+    const c = customClients[ch] || mainClient;
+    // Subatón: X minutos por cada Y de propina (por defecto 1 min por cada 1 de la moneda)
+    const tipMin = (sc) => { const unit = Number(sc.tip_unit) > 0 ? Number(sc.tip_unit) : 1; const m = sc.minutes_per_tip_unit ?? 1; return Math.floor(amount / unit) * (Number(m) || 0); };
+    addSubathonTime(c, `#${ch}`, ch, tipMin, `propina de ${money} de ${name}`, null);
+    addLinkedSubathonTime(ch, tipMin, `propina de ${money} de ${name}`, null);
+    if (cfg.tips_config?.chat_thanks !== false && muffetActiveMap[ch] !== false && !muffetSilentMap[ch]) {
+      c.say(`#${ch}`, `💸 ¡${name} dejó una propina de ${money}! Muchas gracias por el apoyo 🕷️♥`);
+    }
     return;
   }
 
