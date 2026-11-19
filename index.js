@@ -355,6 +355,7 @@ async function loadAllChannels() {
         dbdle_config:       s.dbdle_config       || {},
         emojigame_config:   s.emojigame_config   || {},
         subathon_config:    s.subathon_config    || {},
+        tips_config:        s.tips_config        || {},
         live_announcement:  s.live_announcement  || { enabled: false },
         youtube_music_config: s.youtube_music_config || {},
         feature_flags: s.feature_flags || {}, // interruptores por canal que pone el admin (ej. dbdle:false)
