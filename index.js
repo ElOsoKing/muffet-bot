@@ -736,6 +736,33 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
 }
 
 
+
+// ── Metas de subs/bits (tips_config.goal con type 'subs' o 'bits'; el conteo vive en streamers.goal_progress) ──
+// goal_progress = { goal_id: <started_at de la meta>, count }. Si la meta se reinicia, cambia started_at y el conteo arranca en 0.
+function addGoalProgress(client, ch, kind, amount) {
+  const g = channelConfigs[ch]?.tips_config?.goal;
+  if (!g?.enabled || g.type !== kind || !(amount > 0)) return;
+  return withChannelLock(`goal_${ch}`, async () => {
+    try {
+      const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
+      const row = (await (await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}&select=tips_config,goal_progress&limit=1`, { headers: h })).json())?.[0];
+      const goal = row?.tips_config?.goal;
+      if (!goal?.enabled || goal.type !== kind) return;
+      if (goal.ends_at && Date.now() > Date.parse(goal.ends_at)) return; // ya venció la fecha límite
+      const gp = row.goal_progress?.goal_id === goal.started_at ? row.goal_progress : { goal_id: goal.started_at, count: 0 };
+      const before = Number(gp.count) || 0, after = before + amount;
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, { method: 'PATCH', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ goal_progress: { goal_id: goal.started_at, count: after } }) });
+      console.log(`[meta] #${ch}: +${amount} ${kind} → ${after}/${goal.target}`);
+      const target = Number(goal.target) || 0;
+      if (target > 0 && before < target && after >= target && muffetActiveMap[ch] !== false && !muffetSilentMap[ch]) {
+        const c = customClients[ch] || client;
+        const reto = goal.reward ? ` Reto: ${String(goal.reward).slice(0, 80)} 👀` : '';
+        c.say(`#${ch}`, `🎉🎯 ¡META CUMPLIDA! "${String(goal.title || 'Meta').slice(0, 40)}" llegó a ${target} ${kind}.${reto} ¡Gracias a todos! 🕷️♥`);
+      }
+    } catch (e) { console.error('[meta]', e.message); }
+  });
+}
+
 // ── Chat compartido (Stream Together) ──
 // En un chat compartido, Twitch también manda al canal A las subs/bits/raids que recibe el canal B.
 // Esos eventos traen 'source-room-id' (el canal donde pasó de verdad) distinto de 'room-id' (este canal).
@@ -2719,6 +2746,27 @@ async function handleMessage(client, channel, tags, message, self) {
     client.say(channel, `💸 ¿Quieres apoyar el canal? Deja tu propina aquí: ${base}/tip/${channelName} 🕷️♥`);
     return;
   }
+  // !meta → cómo va la meta de propinas del canal
+  if ((firstWord === '!meta' || firstWord === '!goal') && channelConfigs[channelName]?.tips_config?.goal?.enabled && isSysCmdEnabled(channelName, 'propina') && !channelConfigs[channelName]?.commands?.[firstWord]) {
+    const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
+    try {
+      const st = await (await fetch(`${base}/api/goal/state/${channelName}`, { signal: AbortSignal.timeout(8000) })).json();
+      if (!st?.enabled) return;
+      const bar = '▰'.repeat(Math.round(st.percent / 10)) + '▱'.repeat(10 - Math.round(st.percent / 10));
+      const fmt = v => st.type === 'money' ? `${Number(v).toFixed(2)}` : `${Math.floor(v)}`;
+      const unit = st.type === 'money' ? st.currency : st.unit;
+      const how = st.type === 'subs' ? 'suscríbete o regala una sub ⭐' : st.type === 'bits' ? 'manda bits 💎' : 'apoya con !propina 💸';
+      const reto = st.reward ? ` | Reto: ${st.reward}` : '';
+      let left = '';
+      if (st.ends_at && !st.done && !st.expired) { const ms = Date.parse(st.ends_at) - Date.now(); const d = Math.floor(ms / 86400000), hh = Math.floor(ms / 3600000) % 24, mm = Math.floor(ms / 60000) % 60; left = ` | ⏳ quedan ${d ? d + 'd ' : ''}${hh ? hh + 'h ' : ''}${mm}m`; }
+      client.say(channel, st.done
+        ? `🎯 ${st.title}: ¡META CUMPLIDA! ${fmt(st.current)}/${fmt(st.target)} ${unit} 🎉${reto} 🕷️♥`
+        : st.expired
+          ? `🎯 ${st.title}: se acabó el tiempo ⌛ quedó en ${fmt(st.current)}/${fmt(st.target)} ${unit} (${st.percent}%)`
+          : `🎯 ${st.title}: ${fmt(st.current)}/${fmt(st.target)} ${unit} ${bar} ${st.percent}%${reto}${left} — ${how}`);
+    } catch (e) { console.error('[meta]', e.message); }
+    return;
+  }
   if (firstWord === '!puntos' || firstWord === '!xp' || firstWord === '!nivel' || firstWord === '!level') {
     if (!isSysCmdEnabled(channelName, 'puntos')) return;
     const target = message.trim().split(' ')[1]?.replace('@','').toLowerCase() || username.toLowerCase();
@@ -4034,6 +4082,7 @@ function setupEvents(client) {
     console.log(`[sub] #${ch}: ${username} plan=${methods?.plan}`);
     // El subatón se procesa ANTES del filtro de "bot apagado/silencioso": suma tiempo aunque Muffet no hable
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `sub ${tier} de @${username}`, username);
+    addGoalProgress(client, ch, 'subs', 1);
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `sub ${tier} de @${username}`, username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4050,6 +4099,7 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1; // Prime cuenta como Tier 1
     console.log(`[resub] #${ch}: ${username} plan=${methods?.plan}`);
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `resub de @${username}`, username);
+    addGoalProgress(client, ch, 'subs', 1);
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `resub de @${username}`, username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4095,6 +4145,7 @@ function setupEvents(client) {
     console.log(`[gift] Regalo masivo en #${ch}: ${anon ? 'anónimo' : username} regaló ${numbOfSubs} subs Tier ${tierNum} (origin-id: ${originId || 'sin etiqueta'})`);
     // Los anónimos suman tiempo al subatón, pero no entran al ranking de contribuidores
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    addGoalProgress(client, ch, 'subs', numbOfSubs);
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum) * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4125,6 +4176,7 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
+    addGoalProgress(client, ch, 'subs', 1);
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4148,6 +4200,7 @@ function setupEvents(client) {
     // El subatón suma tiempo con cualquier cantidad de bits — no depende del mínimo para agradecer
     const bitsMin = (c) => (c.bits_unit > 0) ? Math.floor(bits / c.bits_unit) * (c.minutes_per_bits_unit || 0) : 0;
     const cfg = channelConfigs[ch]?.subathon_config || {};
+    addGoalProgress(client, ch, 'bits', bits);
     if (channelConfigs[ch] && cfg.bits_unit > 0) {
       addSubathonTime(client, channel, ch, bitsMin(cfg), `${bits} bits de @${username}`, username);
     }
@@ -4575,6 +4628,17 @@ async function handleTwitchEvent(type, event) {
     if (cfg.tips_config?.chat_thanks !== false && muffetActiveMap[ch] !== false && !muffetSilentMap[ch]) {
       c.say(`#${ch}`, `💸 ¡${name} dejó una propina de ${money}! Muchas gracias por el apoyo 🕷️♥`);
     }
+    return;
+  }
+
+  // ── Meta de propinas cumplida ──
+  if (type === 'goal.reached') {
+    const ch = String(event.channel || '').toLowerCase();
+    if (!channelConfigs[ch] || muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    const c = customClients[ch] || mainClient;
+    const title = String(event.title || 'la meta').replace(/[\r\n]/g, ' ').slice(0, 40);
+    const reto = channelConfigs[ch]?.tips_config?.goal?.reward ? ` Reto: ${String(channelConfigs[ch].tips_config.goal.reward).slice(0, 80)} 👀` : '';
+    c.say(`#${ch}`, `🎉🎯 ¡META CUMPLIDA! "${title}" llegó a ${Number(event.target || 0).toFixed(2)} ${String(event.currency || '').slice(0, 3)}.${reto} ¡Gracias a todos los que apoyaron! 🕷️♥`);
     return;
   }
 
