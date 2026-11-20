@@ -755,14 +755,39 @@ function addGoalProgress(client, ch, kind, amount) {
       await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, { method: 'PATCH', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ goal_progress: { goal_id: goal.started_at, count: after } }) });
       console.log(`[meta] #${ch}: +${amount} ${kind} → ${after}/${goal.target}`);
       const target = Number(goal.target) || 0;
+      const result = { title: goal.title || 'Meta', after, target };
       if (target > 0 && before < target && after >= target && muffetActiveMap[ch] !== false && !muffetSilentMap[ch]) {
         const c = customClients[ch] || client;
         const reto = goal.reward ? ` Reto: ${String(goal.reward).slice(0, 80)} 👀` : '';
         c.say(`#${ch}`, `🎉🎯 ¡META CUMPLIDA! "${String(goal.title || 'Meta').slice(0, 40)}" llegó a ${target} ${kind}.${reto} ¡Gracias a todos! 🕷️♥`);
       }
+      return result;
     } catch (e) { console.error('[meta]', e.message); }
   });
 }
+
+// ── Alertas en pantalla (caja de alertas de silklybot.com) ──
+// El bot solo avisa al servidor; el servidor revisa la config del streamer y manda la alerta al overlay de OBS.
+// Sale aunque Muffet esté apagado o en silencio: la alerta en pantalla no depende del chat.
+// goalPromise (opcional): lo que devolvió addGoalProgress, para que la alerta muestre "🎯 Meta: 46%" ya con este evento sumado.
+function sendScreenAlert(ch, data, goalPromise) {
+  const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
+  const timeout = new Promise(r => setTimeout(r, 3000, null));
+  Promise.race([Promise.resolve(goalPromise).catch(() => null), timeout]).then(goal => {
+    fetch(`${base}/api/internal/alert`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: BOT_SECRET, channel: ch, ...data, goal: goal || undefined }),
+      signal: AbortSignal.timeout(8000)
+    }).catch(() => {});
+  });
+}
+// Minutos que este evento suma al subatón (solo para mostrarlo en la alerta)
+function subathonMinFor(ch, fn) {
+  const c = channelConfigs[ch]?.subathon_config;
+  if (!c?.enabled) return 0;
+  try { return Math.max(0, Number(fn(c)) || 0); } catch (e) { return 0; }
+}
+const displayName = (tags, fallback) => tags?.['display-name'] || fallback;
 
 // ── Chat compartido (Stream Together) ──
 // En un chat compartido, Twitch también manda al canal A las subs/bits/raids que recibe el canal B.
@@ -4055,6 +4080,14 @@ function setupEvents(client) {
     const ch = channel.replace('#','');
     if (fromSharedChat(tags)) return; // chat compartido: el evento es del OTRO canal, no de este
     if (customClients[ch] && customClients[ch] !== client) return; // el bot propio del canal maneja sus eventos
+    {
+      const v = parseInt(viewers) || 0;
+      sendScreenAlert(ch, { event: 'raid', user: username, viewers: v, subathon_min: subathonMinFor(ch, (c) => {
+        if (!c.raid_enabled) return 0;
+        if (c.seconds_per_raid_viewer !== undefined && c.seconds_per_raid_viewer !== null) return v * (Number(c.seconds_per_raid_viewer) || 0) / 60;
+        return v >= (Number(c.raid_min_viewers) || 0) ? Number(c.minutes_per_raid) || 0 : 0;
+      }) });
+    }
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     // Suprimir saludos individuales por 90s — que Muffet reciba a la raid en conjunto, no raider por raider
     raidSuppressGreetings[ch] = Date.now() + 90000;
@@ -4083,7 +4116,7 @@ function setupEvents(client) {
     console.log(`[sub] #${ch}: ${username} plan=${methods?.plan}`);
     // El subatón se procesa ANTES del filtro de "bot apagado/silencioso": suma tiempo aunque Muffet no hable
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `sub ${tier} de @${username}`, username);
-    addGoalProgress(client, ch, 'subs', 1);
+    sendScreenAlert(ch, { event: 'sub', user: username, tier, subathon_min: subathonMinFor(ch, (c) => subMinutes(c, tierNum)) }, addGoalProgress(client, ch, 'subs', 1));
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `sub ${tier} de @${username}`, username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4100,7 +4133,8 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1; // Prime cuenta como Tier 1
     console.log(`[resub] #${ch}: ${username} plan=${methods?.plan}`);
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `resub de @${username}`, username);
-    addGoalProgress(client, ch, 'subs', 1);
+    sendScreenAlert(ch, { event: 'resub', user: username, months: parseInt(userstate?.['msg-param-cumulative-months']) || parseInt(months) || 0, message: message || '',
+      subathon_min: subathonMinFor(ch, (c) => subMinutes(c, tierNum)) }, addGoalProgress(client, ch, 'subs', 1));
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `resub de @${username}`, username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4118,6 +4152,7 @@ function setupEvents(client) {
     console.log(`[primepaidupgrade] #${ch}: ${username} plan=${methods?.plan}`);
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(channelConfigs[ch].subathon_config || {}, tierNum), `sub de @${username} (de Prime a pagada)`, username);
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `sub de @${username} (de Prime a pagada)`, username);
+    sendScreenAlert(ch, { event: 'sub', user: username, tier: `Tier ${tierNum}`, subathon_min: subathonMinFor(ch, (c) => subMinutes(c, tierNum)) });
   });
 
   // ── Regalos de subs: Muffet agradece UNA sola vez, solo a quien regala (nunca a cada receptor) ──
@@ -4146,7 +4181,8 @@ function setupEvents(client) {
     console.log(`[gift] Regalo masivo en #${ch}: ${anon ? 'anónimo' : username} regaló ${numbOfSubs} subs Tier ${tierNum} (origin-id: ${originId || 'sin etiqueta'})`);
     // Los anónimos suman tiempo al subatón, pero no entran al ranking de contribuidores
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, minutesEach * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
-    addGoalProgress(client, ch, 'subs', numbOfSubs);
+    sendScreenAlert(ch, { event: 'gift', user: anon ? 'Anónimo' : username, count: parseInt(numbOfSubs) || 1,
+      subathon_min: subathonMinFor(ch, (c) => subMinutes(c, tierNum) * numbOfSubs) }, addGoalProgress(client, ch, 'subs', numbOfSubs));
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum) * numbOfSubs, `${numbOfSubs} gift subs Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4177,7 +4213,8 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
-    addGoalProgress(client, ch, 'subs', 1);
+    sendScreenAlert(ch, { event: 'gift', user: anon ? 'Anónimo' : username, count: 1,
+      subathon_min: subathonMinFor(ch, (c) => subMinutes(c, tierNum)) }, addGoalProgress(client, ch, 'subs', 1));
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (!channelConfigs[ch]) return;
@@ -4201,7 +4238,10 @@ function setupEvents(client) {
     // El subatón suma tiempo con cualquier cantidad de bits — no depende del mínimo para agradecer
     const bitsMin = (c) => (c.bits_unit > 0) ? Math.floor(bits / c.bits_unit) * (c.minutes_per_bits_unit || 0) : 0;
     const cfg = channelConfigs[ch]?.subathon_config || {};
-    addGoalProgress(client, ch, 'bits', bits);
+    // El mensaje sin los "Cheer100" (son los bits, no texto)
+    const cleanCheerMsg = String(message || '').replace(/(^|\s)[a-z]+\d+(?=\s|$)/gi, ' ').replace(/\s+/g, ' ').trim();
+    if (bits > 0) sendScreenAlert(ch, { event: 'bits', user: displayName(tags, username), amount: bits, message: cleanCheerMsg,
+      subathon_min: subathonMinFor(ch, bitsMin) }, addGoalProgress(client, ch, 'bits', bits));
     if (channelConfigs[ch] && cfg.bits_unit > 0) {
       addSubathonTime(client, channel, ch, bitsMin(cfg), `${bits} bits de @${username}`, username);
     }
