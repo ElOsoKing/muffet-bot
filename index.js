@@ -362,7 +362,8 @@ async function loadAllChannels() {
         custom_bot_username: s.custom_bot_username || null,
         custom_bot_token:    s.custom_bot_token    || null,
       };
-      muffetActiveMap[ch] = true; // sin comandos de apagado: nunca queda silenciado por un on_off_ai=false viejo
+      // Encendida/apagada desde el dashboard (system_commands.muffet === false = apagada). Se revisa cada 30 s.
+      muffetActiveMap[ch] = (s.system_commands || {}).muffet !== false;
       if (!greetedMap[ch]) {
         // Restaurar lista de saludados desde Supabase — sobrevive reinicios del bot
         greetedMap[ch] = new Set(Array.isArray(s.greeted_users) ? s.greeted_users : []);
