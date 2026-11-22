@@ -1093,6 +1093,9 @@ function isSysCmdEnabled(channelName, cmdId) {
 function isPro(channelName) {
   return channelConfigs[channelName]?.plan === 'pro';
 }
+// Música: el plan gratis la tiene con límites; Pro sin ellos (mismos números que PLAN_LIMITS en server.js)
+const MUSIC_FREE = { queue: 10, per_user: 1, max_min: 6 };
+const MUSIC_PRO_QUEUE = 50;
 
 function proOnly(client, channel, username) {
   client.say(channel, `@${username} Este comando es exclusivo del plan Pro~ Visita muffet-dashboard.onrender.com/plans para más info 🕷️⭐`);
@@ -2133,7 +2136,7 @@ async function handleMessage(client, channel, tags, message, self) {
 
   if (firstWord === '!cancion' || firstWord === '!canción' || firstWord === '!song' || firstWord === '!sr') {
     if (!isSysCmdEnabled(channelName, 'cancion')) return;
-    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+    const musicPro = isPro(channelName);
     // Mutex — bloquear al usuario antes de cualquier await
     const chKeyMutex = channelName.replace('#','').toLowerCase();
     const lockKey = `${chKeyMutex}_${username.toLowerCase()}`;
@@ -2151,8 +2154,8 @@ async function handleMessage(client, channel, tags, message, self) {
       const token = await getSpotifyToken(channelName);
       if (!token) { client.say(channel, `@${username} Spotify no está conectado — el streamer debe reconectar su cuenta en el dashboard~ 🎵`); return; }
 
-      // Verificar permisos
-      const allowed = spotifyConfig.allowed || ['everyone'];
+      // Verificar permisos (elegir quién puede pedir es de Pro; en gratis pide todo el chat)
+      const allowed = musicPro ? (spotifyConfig.allowed || ['everyone']) : ['everyone'];
       if (!allowed.includes('everyone')) {
         const isSub = !!tags.subscriber || !!tags.badges?.subscriber;
         const isVIP = !!tags.badges?.vip;
@@ -2179,7 +2182,7 @@ async function handleMessage(client, channel, tags, message, self) {
       }
 
       // ── Límite por usuario — Spotify como fuente de verdad ──
-      const maxPerUser = spotifyConfig.max_per_user || 3;
+      const maxPerUser = musicPro ? (spotifyConfig.max_per_user || 3) : MUSIC_FREE.per_user;
       const chKey = channelName.replace('#','').toLowerCase();
       const userKey = username.toLowerCase();
       const limitsObj = spotifyConfig.song_limits || {};
@@ -2188,6 +2191,13 @@ async function handleMessage(client, channel, tags, message, self) {
 
       if (userPending >= maxPerUser) {
         client.say(channel, `@${username} Tienes ${userPending}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
+        return;
+      }
+      // Cola total (las pedidas por el chat que todavía no suenan)
+      const queueMax = musicPro ? MUSIC_PRO_QUEUE : MUSIC_FREE.queue;
+      const queued = Object.values(limitsObj).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
+      if (queued >= queueMax) {
+        client.say(channel, `@${username} La cola está llena (${queued}/${queueMax})~ Espera a que suenen algunas 🎵`);
         return;
       }
 
@@ -2238,6 +2248,11 @@ async function handleMessage(client, channel, tags, message, self) {
         client.say(channel, `@${username} Esa canción o artista está en la lista negra~ 🕷️`);
         return;
       }
+      // Plan gratis: canciones de hasta 6 minutos
+      if (!musicPro && Number(track.duration_ms) > MUSIC_FREE.max_min * 60000) {
+        client.say(channel, `@${username} Esa canción dura ${Math.ceil(track.duration_ms / 60000)} min — el máximo es ${MUSIC_FREE.max_min} min~ 🎵`);
+        return;
+      }
 
       // Agregar a Spotify
       const queueRes = await fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`, {
@@ -2282,7 +2297,7 @@ async function handleMessage(client, channel, tags, message, self) {
   // ── !yt — solicitar canción de YouTube ──
   if (firstWord === '!yt' || firstWord === '!youtube') {
     if (!isSysCmdEnabled(channelName, 'yt')) return;
-    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
+    const musicPro = isPro(channelName);
     // Mutex — evitar que dos peticiones simultáneas del mismo usuario se pisen (mismo patrón que !cancion)
     const ytLockKey = `yt_${channelName}_${username.toLowerCase()}`;
     if (activeSongRequests.has(ytLockKey)) return;
@@ -2292,7 +2307,9 @@ async function handleMessage(client, channel, tags, message, self) {
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } });
       const data = await res.json();
       const streamer = data?.[0];
-      const ytConfig = streamer?.youtube_config || {};
+      const savedYt = streamer?.youtube_config || {};
+      // Plan gratis: 1 canción por persona, hasta 6 min y todo el chat puede pedir (lo guardado vuelve si es Pro)
+      const ytConfig = musicPro ? savedYt : { ...savedYt, max_per_user: MUSIC_FREE.per_user, max_duration_min: Math.min(savedYt.max_duration_min || 10, MUSIC_FREE.max_min), allowed: ['everyone'] };
 
       if (!ytConfig.enabled) { client.say(channel, `@${username} Las peticiones de YouTube están desactivadas ahora mismo~ 🎵`); return; }
 
@@ -2382,6 +2399,8 @@ async function handleMessage(client, channel, tags, message, self) {
         const mine = Array.isArray(limits[userKey]) ? limits[userKey] : [];
         if (mine.length >= maxPerUser) return { abort: true, reason: 'limit', current: mine.length };
         if (queue.some(q => q.videoId === chosen.videoId)) return { abort: true, reason: 'dup' };
+        const queueMax = musicPro ? MUSIC_PRO_QUEUE : MUSIC_FREE.queue;
+        if (queue.length >= queueMax) return { abort: true, reason: 'full', max: queueMax };
         queue.push({ videoId: chosen.videoId, title: chosen.title, channelTitle: chosen.channelTitle, requestedBy: userKey, addedAt: Date.now(), durationSec: chosen.durationSec });
         mine.push({ uri: chosen.videoId, addedAt: Date.now(), durationMs: chosen.durationSec * 1000 });
         limits[userKey] = mine;
@@ -2392,6 +2411,7 @@ async function handleMessage(client, channel, tags, message, self) {
       if (!addResult.ok) {
         if (addResult.reason === 'limit') client.say(channel, `@${username} Tienes ${addResult.current}/${maxPerUser} canciones en cola~ Espera a que suene una 🎵`);
         else if (addResult.reason === 'dup') client.say(channel, `@${username} Esa canción ya está en la cola~ 🎵`);
+        else if (addResult.reason === 'full') client.say(channel, `@${username} La cola está llena (${addResult.max}/${addResult.max})~ Espera a que suenen algunas 🎵`);
         else client.say(channel, `@${username} La cola está muy movida, intenta de nuevo en un momento~ 🎵`);
         return;
       }
@@ -2405,7 +2425,6 @@ async function handleMessage(client, channel, tags, message, self) {
 
   if (firstWord === '!skip') {
     if (!isMod(tags, channelName)) return;
-    if (!isPro(channelName)) { proOnly(client, channel, username); return; }
     try {
       const token = await getSpotifyToken(channelName);
       if (!token) return;
@@ -3108,6 +3127,13 @@ async function handleMessage(client, channel, tags, message, self) {
     if (firstWord === '!addcmd' && existing) {
       client.say(channel, `@${username} ${trigger} ya existe — usa !editcmd ${trigger} <nueva respuesta> para cambiarlo~ 🕷️`);
       return;
+    }
+    if (firstWord === '!addcmd') {
+      const cmdMax = isPro(channelName) ? 50 : 15; // mismos números que PLAN_LIMITS.commands en server.js
+      if (Object.keys(commands).length >= cmdMax) {
+        client.say(channel, isPro(channelName) ? `@${username} Ya tienes ${cmdMax} comandos, el máximo~ Borra alguno con !delcmd 🕷️` : `@${username} El plan gratis permite ${cmdMax} comandos — con Pro tienes hasta 50 ⭐ Borra alguno con !delcmd 🕷️`);
+        return;
+      }
     }
     if (firstWord === '!editcmd' && !existing) {
       client.say(channel, `@${username} ${trigger} no existe todavía — créalo con !addcmd ${trigger} <respuesta>~ 🕷️`);
