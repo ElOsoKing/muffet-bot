@@ -1091,7 +1091,8 @@ function isSysCmdEnabled(channelName, cmdId) {
 }
 
 function isPro(channelName) {
-  return channelConfigs[channelName]?.plan === 'pro';
+  const plan = channelConfigs[channelName]?.plan;
+  return plan === 'pro' || plan === 'admin'; // admin cuenta como Pro (igual que en el dashboard)
 }
 // Música: el plan gratis la tiene con límites; Pro sin ellos (mismos números que PLAN_LIMITS en server.js)
 const MUSIC_FREE = { queue: 10, per_user: 1, max_min: 6 };
