@@ -4213,7 +4213,7 @@ function setupEvents(client) {
     const tierNum = methods?.plan === '3000' ? 3 : methods?.plan === '2000' ? 2 : 1;
     const cfg = channelConfigs[ch]?.subathon_config || {};
     if (channelConfigs[ch]) addSubathonTime(client, channel, ch, subMinutes(cfg, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
-    sendScreenAlert(ch, { event: 'gift', user: anon ? 'Anónimo' : username, count: 1,
+    sendScreenAlert(ch, { event: 'gift', user: anon ? 'Anónimo' : username, count: 1, recipient: recipient || '',
       subathon_min: subathonMinFor(ch, (c) => subMinutes(c, tierNum)) }, addGoalProgress(client, ch, 'subs', 1));
     addLinkedSubathonTime(ch, (c) => subMinutes(c, tierNum), `gift sub Tier ${tierNum} de ${anon ? 'un anónimo' : '@' + username}`, anon ? null : username);
     if (muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
