@@ -1127,6 +1127,7 @@ function isPro(channelName) {
   // Pro vencido o prueba terminada: ya es gratis aunque checkExpiredPlans todavía no lo haya bajado
   return plan === 'pro' && !(cfg.plan_expires_at && Date.parse(cfg.plan_expires_at) < Date.now());
 }
+const silklyCmdCooldown = {}; // !silkly: 1 vez cada 30 s por canal
 // Música: el plan gratis la tiene con límites; Pro sin ellos (mismos números que PLAN_LIMITS en server.js)
 const MUSIC_FREE = { queue: 10, per_user: 1, max_min: 6 };
 const MUSIC_PRO_QUEUE = 50;
@@ -2499,6 +2500,15 @@ async function handleMessage(client, channel, tags, message, self) {
   }
 
   // ── !uptime ──
+  // ── !silkly: qué bot es este (con el link de invitación del canal: si otro streamer se registra, los dos ganan Pro) ──
+  if ((firstWord === '!silkly' || firstWord === '!silklybot') && !channelConfigs[channelName]?.commands?.[firstWord]) {
+    const now = Date.now();
+    if (now - (silklyCmdCooldown[channelName] || 0) < 30000) return;
+    silklyCmdCooldown[channelName] = now;
+    const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
+    client.say(channel, `🕷️ Este bot es SilklyBot: alertas, música, propinas, juegos y más para tu canal de Twitch, gratis y en español 👉 ${base}/r/${channelName} (si te registras con este link, tú y ${channelName} ganan 14 días de Pro ⭐)`);
+    return;
+  }
   if (firstWord === '!uptime') {
     if (!isSysCmdEnabled(channelName, 'uptime')) return;
     try {
