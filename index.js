@@ -4621,9 +4621,18 @@ async function start() {
 
   // ── Estado de cada canal para el panel de admin (bot_status en Supabase) ──
   // Solo escribe cuando algo cambia o cada 20 min, así son pocas peticiones. Si la columna no existe, se apaga sola.
+  // Última actividad que ya estaba anotada antes de reiniciar el bot (para no borrarla con null al arrancar)
+  let prevLastChat = null;
   async function reportBotStatus() {
     if (botStatusDisabled) return;
     try {
+      if (!prevLastChat) {
+        prevLastChat = {};
+        try {
+          const rows = await (await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,bot_status`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } })).json();
+          for (const r of Array.isArray(rows) ? rows : []) if (r.bot_status?.last_chat_at) prevLastChat[String(r.twitch_username).toLowerCase()] = r.bot_status.last_chat_at;
+        } catch (e) {}
+      }
       const mainToken = (TWITCH_OAUTH_TOKEN || '').replace(/^oauth:/, '');
       const mainJoined = new Set((mainClient?.getChannels?.() || []).map(c => c.replace('#', '')));
       const yes = (v) => v === true || v === '1' || v === 1;
@@ -4643,7 +4652,7 @@ async function start() {
         const r = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
           method: 'PATCH',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bot_status: { ...core, last_chat_at: last ? new Date(last).toISOString() : null, updated_at: new Date().toISOString() } })
+          body: JSON.stringify({ bot_status: { ...core, last_chat_at: last ? new Date(last).toISOString() : (prevLastChat[ch] || null), updated_at: new Date().toISOString() } })
         });
         if (!r.ok) {
           if (r.status === 400 || r.status === 404) { botStatusDisabled = true; console.error('[estado] No existe la columna bot_status en Supabase — corre admin_mejoras.sql. Se desactiva el reporte de estado.'); return; }
