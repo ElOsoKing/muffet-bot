@@ -4894,6 +4894,11 @@ async function syncRaffleRewards() {
 // ── Polling de stream en vivo ──
 const streamLiveMap = {}; // { channelName: true/false } — si estaba en vivo
 
+// ¿El bot está dentro del chat del canal y encendido? (para las invitaciones: el primer stream tiene que ser CON el bot)
+function botActiveIn(ch) {
+  const has = (c) => !!c && (c.getChannels?.() || []).map(x => x.replace('#', '').toLowerCase()).includes(ch);
+  return (has(customClients[ch]) || has(mainClient)) && muffetActiveMap[ch] !== false;
+}
 async function checkStreamsLive() {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/streamers?approved=eq.true&select=twitch_username,live_announcement,plan`,
@@ -4936,11 +4941,11 @@ async function checkStreamsLive() {
         const liveRes = await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, {
           method: 'PATCH',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ live_announcement: { ...liveConfig, last_seen_started_at: stream.started_at } })
+          body: JSON.stringify({ live_announcement: { ...liveConfig, last_seen_started_at: stream.started_at, bot_in_chat: botActiveIn(ch) } })
         });
         if (!liveRes.ok) console.error(`[live-reset] Falló el PATCH para #${ch}: status ${liveRes.status}`);
       } catch(e) { console.error(`[live-reset] Error de red para #${ch}:`, e.message); }
-      if (channelConfigs[ch]) channelConfigs[ch].live_announcement = { ...liveConfig, last_seen_started_at: stream.started_at };
+      if (channelConfigs[ch]) channelConfigs[ch].live_announcement = { ...liveConfig, last_seen_started_at: stream.started_at, bot_in_chat: botActiveIn(ch) };
 
       if (greetedPersistTimers[ch]) { clearTimeout(greetedPersistTimers[ch]); delete greetedPersistTimers[ch]; }
       chatViewers[ch] = new Set();
