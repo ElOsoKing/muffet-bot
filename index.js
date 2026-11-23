@@ -738,30 +738,59 @@ async function addSubathonTime(client, channel, channelName, minutesToAdd, chatR
 
 
 
-// ── Metas de subs/bits (tips_config.goal con type 'subs' o 'bits'; el conteo vive en streamers.goal_progress) ──
-// goal_progress = { goal_id: <started_at de la meta>, count }. Si la meta se reinicia, cambia started_at y el conteo arranca en 0.
+// ── Metas (tips_config.goals = [...]; la vieja tips_config.goal se lee como la primera) ──
+// Plan gratis: 1 meta · Pro: hasta 3 (mismos números que PLAN_LIMITS.goals en server.js).
+// Subs/bits: el conteo vive en streamers.goal_progress = { counts: { <started_at de la meta>: n } }.
+// Si una meta se reinicia cambia su started_at y arranca en 0. El formato viejo { goal_id, count } se sigue entendiendo.
+function goalsOfCfg(tc, ch, all = false) {
+  tc = tc || {};
+  const list = Array.isArray(tc.goals) ? tc.goals : (tc.goal && (tc.goal.target || tc.goal.enabled) ? [{ id: 'g1', ...tc.goal }] : []);
+  const ok = list.filter(g => g && typeof g === 'object');
+  return all ? ok : ok.slice(0, isPro(ch) ? 3 : 1); // all: también las que el plan gratis pausa
+}
+function goalCount(gp, startedAt) {
+  gp = gp || {};
+  if (gp.counts && typeof gp.counts === 'object' && gp.counts[startedAt] != null) return Number(gp.counts[startedAt]) || 0;
+  return gp.goal_id === startedAt ? Number(gp.count) || 0 : 0;
+}
 function addGoalProgress(client, ch, kind, amount) {
-  const g = channelConfigs[ch]?.tips_config?.goal;
-  if (!g?.enabled || g.type !== kind || !(amount > 0)) return;
+  const local = goalsOfCfg(channelConfigs[ch]?.tips_config, ch);
+  if (!(amount > 0) || !local.some(g => g.enabled && g.type === kind)) return;
   return withChannelLock(`goal_${ch}`, async () => {
     try {
       const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
       const row = (await (await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}&select=tips_config,goal_progress&limit=1`, { headers: h })).json())?.[0];
-      const goal = row?.tips_config?.goal;
-      if (!goal?.enabled || goal.type !== kind) return;
-      if (goal.ends_at && Date.now() > Date.parse(goal.ends_at)) return; // ya venció la fecha límite
-      const gp = row.goal_progress?.goal_id === goal.started_at ? row.goal_progress : { goal_id: goal.started_at, count: 0 };
-      const before = Number(gp.count) || 0, after = before + amount;
-      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, { method: 'PATCH', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ goal_progress: { goal_id: goal.started_at, count: after } }) });
-      console.log(`[meta] #${ch}: +${amount} ${kind} → ${after}/${goal.target}`);
-      const target = Number(goal.target) || 0;
-      const result = { title: goal.title || 'Meta', after, target };
-      if (target > 0 && before < target && after >= target && muffetActiveMap[ch] !== false && !muffetSilentMap[ch]) {
-        const c = customClients[ch] || client;
-        const reto = goal.reward ? ` Reto: ${String(goal.reward).slice(0, 80)} 👀` : '';
-        c.say(`#${ch}`, `🎉🎯 ¡META CUMPLIDA! "${String(goal.title || 'Meta').slice(0, 40)}" llegó a ${target} ${kind}.${reto} ¡Gracias a todos! 🕷️♥`);
+      const goals = goalsOfCfg(row?.tips_config, ch).filter(g => g.enabled && g.type === kind && g.started_at && !(g.ends_at && Date.now() > Date.parse(g.ends_at)));
+      if (!goals.length) return;
+      // Pasar el formato viejo a counts sin perder lo que llevaba
+      const gp = row.goal_progress || {};
+      const counts = { ...(gp.counts && typeof gp.counts === 'object' ? gp.counts : {}) };
+      if (gp.goal_id && counts[gp.goal_id] == null) counts[gp.goal_id] = Number(gp.count) || 0;
+      const results = [];
+      for (const goal of goals) {
+        const before = goalCount({ counts }, goal.started_at), after = before + amount;
+        counts[goal.started_at] = after;
+        results.push({ goal, before, after, target: Number(goal.target) || 0 });
       }
-      return result;
+      // Solo se guardan los conteos de metas que existen (así no crece para siempre)
+      const alive = new Set(goalsOfCfg(row?.tips_config, ch, true).map(g => g.started_at)); // las pausadas por el plan conservan su conteo
+      for (const k of Object.keys(counts)) if (!alive.has(k)) delete counts[k];
+      await fetch(`${SUPABASE_URL}/rest/v1/streamers?twitch_username=eq.${ch}`, { method: 'PATCH', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ goal_progress: { counts } }) });
+      const talk = muffetActiveMap[ch] !== false && !muffetSilentMap[ch];
+      const c = customClients[ch] || client;
+      for (const r of results) {
+        const title = String(r.goal.title || 'Meta').slice(0, 40);
+        console.log(`[meta] #${ch}: +${amount} ${kind} → ${r.after}/${r.target} (${title})`);
+        if (!(r.target > 0) || !talk) continue;
+        if (r.before < r.target && r.after >= r.target) {
+          const reto = r.goal.reward ? ` Reto: ${String(r.goal.reward).slice(0, 80)} 👀` : '';
+          c.say(`#${ch}`, `🎉🎯 ¡META CUMPLIDA! "${title}" llegó a ${r.target} ${kind}.${reto} ¡Gracias a todos! 🕷️♥`);
+        } else if (r.before < r.target * 0.9 && r.after >= r.target * 0.9) {
+          c.say(`#${ch}`, `🔥🎯 ¡Ya casi! "${title}" va en ${r.after}/${r.target} ${kind} — solo faltan ${Math.ceil(r.target - r.after)} 👀 ${kind === 'subs' ? 'suscríbete o regala una sub ⭐' : 'manda bits 💎'}`);
+        }
+      }
+      const r0 = results[0];
+      return { title: r0.goal.title || 'Meta', after: r0.after, target: r0.target };
     } catch (e) { console.error('[meta]', e.message); }
   });
 }
@@ -2793,23 +2822,30 @@ async function handleMessage(client, channel, tags, message, self) {
     return;
   }
   // !meta → cómo va la meta de propinas del canal
-  if ((firstWord === '!meta' || firstWord === '!goal') && channelConfigs[channelName]?.tips_config?.goal?.enabled && isSysCmdEnabled(channelName, 'propina') && !channelConfigs[channelName]?.commands?.[firstWord]) {
+  if ((firstWord === '!meta' || firstWord === '!goal' || firstWord === '!metas') && goalsOfCfg(channelConfigs[channelName]?.tips_config, channelName).some(g => g.enabled) && isSysCmdEnabled(channelName, 'propina') && !channelConfigs[channelName]?.commands?.[firstWord]) {
     const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
     try {
-      const st = await (await fetch(`${base}/api/goal/state/${channelName}`, { signal: AbortSignal.timeout(8000) })).json();
-      if (!st?.enabled) return;
-      const bar = '▰'.repeat(Math.round(st.percent / 10)) + '▱'.repeat(10 - Math.round(st.percent / 10));
-      const fmt = v => st.type === 'money' ? `${Number(v).toFixed(2)}` : `${Math.floor(v)}`;
-      const unit = st.type === 'money' ? st.currency : st.unit;
-      const how = st.type === 'subs' ? 'suscríbete o regala una sub ⭐' : st.type === 'bits' ? 'manda bits 💎' : 'apoya con !propina 💸';
-      const reto = st.reward ? ` | Reto: ${st.reward}` : '';
-      let left = '';
-      if (st.ends_at && !st.done && !st.expired) { const ms = Date.parse(st.ends_at) - Date.now(); const d = Math.floor(ms / 86400000), hh = Math.floor(ms / 3600000) % 24, mm = Math.floor(ms / 60000) % 60; left = ` | ⏳ quedan ${d ? d + 'd ' : ''}${hh ? hh + 'h ' : ''}${mm}m`; }
-      client.say(channel, st.done
-        ? `🎯 ${st.title}: ¡META CUMPLIDA! ${fmt(st.current)}/${fmt(st.target)} ${unit} 🎉${reto} 🕷️♥`
-        : st.expired
-          ? `🎯 ${st.title}: se acabó el tiempo ⌛ quedó en ${fmt(st.current)}/${fmt(st.target)} ${unit} (${st.percent}%)`
-          : `🎯 ${st.title}: ${fmt(st.current)}/${fmt(st.target)} ${unit} ${bar} ${st.percent}%${reto}${left} — ${how}`);
+      const all = ((await (await fetch(`${base}/api/goals/state/${channelName}`, { signal: AbortSignal.timeout(8000) })).json())?.goals || []).filter(g => g?.enabled);
+      if (!all.length) return;
+      const fmtOf = st => v => st.type === 'money' ? `${Number(v).toFixed(2)}` : `${Math.floor(v)}`;
+      const unitOf = st => st.type === 'money' ? st.currency : st.unit;
+      if (all.length === 1) {
+        const st = all[0], fmt = fmtOf(st), unit = unitOf(st);
+        const bar = '▰'.repeat(Math.round(st.percent / 10)) + '▱'.repeat(10 - Math.round(st.percent / 10));
+        const how = st.type === 'subs' ? 'suscríbete o regala una sub ⭐' : st.type === 'bits' ? 'manda bits 💎' : 'apoya con !propina 💸';
+        const reto = st.reward ? ` | Reto: ${st.reward}` : '';
+        let left = '';
+        if (st.ends_at && !st.done && !st.expired) { const ms = Date.parse(st.ends_at) - Date.now(); const d = Math.floor(ms / 86400000), hh = Math.floor(ms / 3600000) % 24, mm = Math.floor(ms / 60000) % 60; left = ` | ⏳ quedan ${d ? d + 'd ' : ''}${hh ? hh + 'h ' : ''}${mm}m`; }
+        client.say(channel, st.done
+          ? `🎯 ${st.title}: ¡META CUMPLIDA! ${fmt(st.current)}/${fmt(st.target)} ${unit} 🎉${reto} 🕷️♥`
+          : st.expired
+            ? `🎯 ${st.title}: se acabó el tiempo ⌛ quedó en ${fmt(st.current)}/${fmt(st.target)} ${unit} (${st.percent}%)`
+            : `🎯 ${st.title}: ${fmt(st.current)}/${fmt(st.target)} ${unit} ${bar} ${st.percent}%${reto}${left} — ${how}`);
+      } else {
+        // Varias metas: una línea corta por meta
+        const parts = all.map(st => { const fmt = fmtOf(st); return `${st.title}: ${fmt(st.current)}/${fmt(st.target)} ${unitOf(st)} ${st.done ? '✅' : st.expired ? '⌛' : st.percent + '%'}`; });
+        client.say(channel, `🎯 Metas → ${parts.join(' | ')} 🕷️`.slice(0, 480));
+      }
     } catch (e) { console.error('[meta]', e.message); }
     return;
   }
@@ -4705,8 +4741,20 @@ async function handleTwitchEvent(type, event) {
     if (!channelConfigs[ch] || muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     const c = customClients[ch] || mainClient;
     const title = String(event.title || 'la meta').replace(/[\r\n]/g, ' ').slice(0, 40);
-    const reto = channelConfigs[ch]?.tips_config?.goal?.reward ? ` Reto: ${String(channelConfigs[ch].tips_config.goal.reward).slice(0, 80)} 👀` : '';
+    const rw = event.reward != null ? event.reward : channelConfigs[ch]?.tips_config?.goal?.reward;
+    const reto = rw ? ` Reto: ${String(rw).replace(/[\r\n]/g, ' ').slice(0, 80)} 👀` : '';
     c.say(`#${ch}`, `🎉🎯 ¡META CUMPLIDA! "${title}" llegó a ${Number(event.target || 0).toFixed(2)} ${String(event.currency || '').slice(0, 3)}.${reto} ¡Gracias a todos los que apoyaron! 🕷️♥`);
+    return;
+  }
+  // ── Meta de propinas al 90% ──
+  if (type === 'goal.near') {
+    const ch = String(event.channel || '').toLowerCase();
+    if (!channelConfigs[ch] || muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    const c = customClients[ch] || mainClient;
+    const title = String(event.title || 'la meta').replace(/[\r\n]/g, ' ').slice(0, 40);
+    const cur = String(event.currency || '').slice(0, 3);
+    const falta = Math.max(0, Number(event.target || 0) - Number(event.current || 0)).toFixed(2);
+    c.say(`#${ch}`, `🔥🎯 ¡Ya casi! "${title}" va en ${Number(event.current || 0).toFixed(2)}/${Number(event.target || 0).toFixed(2)} ${cur} — solo faltan ${falta} ${cur} 👀 apoya con !propina 💸`);
     return;
   }
 
