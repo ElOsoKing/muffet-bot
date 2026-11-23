@@ -287,7 +287,7 @@ const defaultConfig = (username) => ({
 // ══════════════════════════════════════════
 //  CARGAR TODOS LOS CANALES APROBADOS
 // ══════════════════════════════════════════
-const LOAD_CHANNEL_COLUMNS = ['tips_config', 'ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'feature_flags', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
+const LOAD_CHANNEL_COLUMNS = ['tips_config', 'ai_enabled', 'auto_message_interval', 'auto_messages', 'banned_words', 'bot_prompt', 'commands', 'counters', 'counters_permission', 'custom_bot_token', 'custom_bot_username', 'dbdle_config', 'emojigame_config', 'feature_flags', 'live_announcement', 'mod_config', 'mod_enabled', 'off_message', 'on_message', 'on_off_ai', 'plan', 'points_config', 'plan_expires_at', 'pokedle_config', 'primerin_config', 'raffle_settings', 'social_links', 'subathon_config', 'system_commands', 'twitch_username', 'viewer_points', 'warn_message', 'youtube_music_config'];
 let greetedLoadedOnce = false;
 // Canales con puntos/XP sin guardar en Supabase: loadAllChannels NO debe pisar la memoria con datos viejos de la BD
 const viewerPointsDirty = {};
@@ -322,6 +322,7 @@ async function loadAllChannels() {
         banned_words:  s.banned_words  || [],
         warn_message:  s.warn_message  || '⚠️ Cuidado, dearie~ 🕷️',
         plan:          s.plan          || 'free',
+        plan_expires_at: s.plan_expires_at || null,
         on_off_ai:     s.on_off_ai     !== false,
         on_message:    s.on_message    || null,
         off_message:   s.off_message   || null,
@@ -1120,8 +1121,11 @@ function isSysCmdEnabled(channelName, cmdId) {
 }
 
 function isPro(channelName) {
-  const plan = channelConfigs[channelName]?.plan;
-  return plan === 'pro' || plan === 'admin'; // admin cuenta como Pro (igual que en el dashboard)
+  const cfg = channelConfigs[channelName];
+  const plan = cfg?.plan;
+  if (plan === 'admin') return true; // admin cuenta como Pro (igual que en el dashboard)
+  // Pro vencido o prueba terminada: ya es gratis aunque checkExpiredPlans todavía no lo haya bajado
+  return plan === 'pro' && !(cfg.plan_expires_at && Date.parse(cfg.plan_expires_at) < Date.now());
 }
 // Música: el plan gratis la tiene con límites; Pro sin ellos (mismos números que PLAN_LIMITS en server.js)
 const MUSIC_FREE = { queue: 10, per_user: 1, max_min: 6 };
@@ -4418,7 +4422,7 @@ async function checkExpiredPlans() {
   } catch(e) { console.error('[Plans] Error checking expired:', e.message); }
 }
 
-setInterval(checkExpiredPlans, 6 * 60 * 60 * 1000); // cada 6 horas
+setInterval(checkExpiredPlans, 60 * 60 * 1000); // cada hora (las pruebas de Pro de 7 días vencen a cualquier hora)
 checkExpiredPlans(); // al iniciar
 
 async function start() {
