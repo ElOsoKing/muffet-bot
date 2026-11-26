@@ -4792,17 +4792,17 @@ async function handleTwitchEvent(type, event) {
     return;
   }
 
-  // ── Nota de voz nueva (aviso a los mods) ──
-  if (type === 'voice.new' || type === 'voice.limit') {
+  // ── Notas de voz: ya no se avisa cada nota nueva en el chat (Twitch ya muestra quién canjeó) ──
+  if (type === 'voice.new') return;
+  // Solo se avisa cuando se llegó al límite del stream y se devolvieron los puntos
+  if (type === 'voice.limit') {
     const ch = String(event.channel || '').toLowerCase();
     if (!channelConfigs[ch] || muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
     if (Date.now() - (vozNoticeAt[ch] || 0) < 20000) return;
     vozNoticeAt[ch] = Date.now();
     const c = customClients[ch] || mainClient;
     const who = String(event.user || 'alguien').replace(/[\r\n@]/g, '').slice(0, 30);
-    const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
-    if (type === 'voice.new') c.say(`#${ch}`, `🎙️ @${who} mandó una nota de voz — mods, a escucharla 👉 ${base}/voz/${ch}/mods`);
-    else c.say(`#${ch}`, `🎙️ @${who} este stream ya llegó al límite de notas de voz; Twitch te devolvió los puntos 💜`);
+    c.say(`#${ch}`, `🎙️ @${who} este stream ya llegó al límite de notas de voz; Twitch te devolvió los puntos 💜`);
     return;
   }
 
