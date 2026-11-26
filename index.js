@@ -1128,6 +1128,8 @@ function isPro(channelName) {
   return plan === 'pro' && !(cfg.plan_expires_at && Date.parse(cfg.plan_expires_at) < Date.now());
 }
 const silklyCmdCooldown = {}; // !silkly: 1 vez cada 30 s por canal
+const vozCmdCooldown = {};    // !voz: 1 vez cada 20 s por canal
+const vozNoticeAt = {};       // aviso "llegó una nota de voz": como mucho 1 cada 20 s por canal
 // Música: el plan gratis la tiene con límites; Pro sin ellos (mismos números que PLAN_LIMITS en server.js)
 const MUSIC_FREE = { queue: 10, per_user: 1, max_min: 6 };
 const MUSIC_PRO_QUEUE = 50;
@@ -2507,6 +2509,15 @@ async function handleMessage(client, channel, tags, message, self) {
     silklyCmdCooldown[channelName] = now;
     const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
     client.say(channel, `🕷️ Este bot es SilklyBot: alertas, música, propinas, juegos y más para tu canal de Twitch, gratis y en español 👉 ${base}/r/${channelName} (si te registras con este link, tú y ${channelName} ganan 14 días de Pro ⭐)`);
+    return;
+  }
+  // ── !voz: link para mandar una nota de voz al stream ──
+  if ((firstWord === '!voz' || firstWord === '!nota') && !channelConfigs[channelName]?.commands?.[firstWord]) {
+    const now = Date.now();
+    if (now - (vozCmdCooldown[channelName] || 0) < 20000) return;
+    vozCmdCooldown[channelName] = now;
+    const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
+    client.say(channel, `🎙️ ¡Manda una nota de voz al stream! Grábala aquí 👉 ${base}/voz/${channelName} y canjea "🎙️ Nota de voz" con tus puntos. Si un mod la aprueba, suena en directo 🕷️`);
     return;
   }
   if (firstWord === '!uptime') {
@@ -4778,6 +4789,20 @@ async function handleTwitchEvent(type, event) {
     const cur = String(event.currency || '').slice(0, 3);
     const falta = Math.max(0, Number(event.target || 0) - Number(event.current || 0)).toFixed(2);
     c.say(`#${ch}`, `🔥🎯 ¡Ya casi! "${title}" va en ${Number(event.current || 0).toFixed(2)}/${Number(event.target || 0).toFixed(2)} ${cur} — solo faltan ${falta} ${cur} 👀 apoya con !propina 💸`);
+    return;
+  }
+
+  // ── Nota de voz nueva (aviso a los mods) ──
+  if (type === 'voice.new' || type === 'voice.limit') {
+    const ch = String(event.channel || '').toLowerCase();
+    if (!channelConfigs[ch] || muffetActiveMap[ch] === false || muffetSilentMap[ch]) return;
+    if (Date.now() - (vozNoticeAt[ch] || 0) < 20000) return;
+    vozNoticeAt[ch] = Date.now();
+    const c = customClients[ch] || mainClient;
+    const who = String(event.user || 'alguien').replace(/[\r\n@]/g, '').slice(0, 30);
+    const base = (process.env.BASE_URL || 'https://silklybot.com').replace(/\/$/, '');
+    if (type === 'voice.new') c.say(`#${ch}`, `🎙️ @${who} mandó una nota de voz — mods, a escucharla 👉 ${base}/voz/${ch}/mods`);
+    else c.say(`#${ch}`, `🎙️ @${who} este stream ya llegó al límite de notas de voz; Twitch te devolvió los puntos 💜`);
     return;
   }
 
